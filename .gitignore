@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # General
 .DS_Store
 Thumbs.db
@@ -29,6 +27,34 @@ coverage/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Expo/React Native
+.expo/
+.expo-shared/
+metro-cache/
+
+# Android/iOS
+*.apk
+*.aab
+*.ipa
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.iml
+.gradle/
+.cxx/
+local.properties
+*.hprof
+*.jsbundle
+
+# TypeScript
+*.tsbuildinfo
+
+# OS X
+.DS_Store
 
 # Zip/Archives
 *.zip

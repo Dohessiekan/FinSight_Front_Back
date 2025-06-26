@@ -1,0 +1,125 @@
+.login-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: white;
+  overflow: hidden;
+}
+
+.login-left {
+  width: 50%;
+  background-color: white;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;   /* stack image and text vertically */
+  align-items: center;
+  justify-content: center;
+  text-align: center;       /* center text inside */
+}
+
+.logo-container {
+  /* You can adjust image container styles here */
+  margin-bottom: 20px;      /* space below image */
+}
+
+.logo-img {
+  width: 300px;
+  height: auto;
+}
+
+.text-container {
+  padding-left: 100px;
+  padding-right: 120px;
+  max-width: 400px;
+}
+
+.logo-description {
+  font-size: 1rem;
+  color: #333;
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* Dots under the text */
+.dots-container {
+  margin-top: 20px; /* space between text and dots */
+  display: flex;
+  justify-content: center;
+  gap: 15px; /* spacing between dots */
+}
+
+.dot {
+  width: 5px;
+  height: 5px;
+  background-color: #000dff; /* same blue as login-right */
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.login-right {
+  width: 50%;
+  background-color: #000dff;
+  height: 100vh;
+  clip-path: polygon(
+    10% 0%, 100% 0%, 
+    100% 100%, 10% 100%, 
+    0% 75%, 0% 25%
+  );
+  -webkit-clip-path: polygon(
+    10% 0%, 100% 0%, 
+    100% 100%, 10% 100%, 
+    0% 75%, 0% 25%
+  );
+
+  /* Flex centering */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: white;
+  font-size: 1.5rem;
+  font-weight: bold;
+  text-align: center;
+  position: relative;
+  flex-direction: column;
+}
+
+/* Control vertical spacing of the welcome message */
+.welcome-message {
+  margin-top: -30px;    /* adjust this value to move the message down or up */
+  margin-bottom: 30px; /* adjust space below message */
+}
+
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  width: 80%;
+  max-width: 350px;
+  gap: 40px;
+}
+
+.login-input {
+  padding: 10px 15px;
+  border: none;
+  border-radius: 5px;
+  background-color: #D9D9D9; /* Light gray background */
+  color: #000;               /* Black text */
+  font-size: 1rem;
+}
+
+.login-button {
+  padding: 12px 15px;
+  background-color: white;
+  color: #000dff;
+  font-weight: bold;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.login-button:hover {
+  background-color: #e0e0ff;
+}
+

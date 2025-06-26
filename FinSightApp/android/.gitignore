@@ -1,0 +1,28 @@
+# OSX
+#
+.DS_Store
+
+# Android/IntelliJ
+#
+build/
+.idea/
+.gradle/
+local.properties
+*.iml
+*.hprof
+.cxx/
+
+# Bundle artifacts
+*.jsbundle
+
+# Editor
+.vscode/
+*.code-workspace
+
+# System
+.env*
+
+# Archives
+*.zip
+*.tar.gz
+*.tgz

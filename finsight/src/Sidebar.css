@@ -1,0 +1,131 @@
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 250px; /* Adjust width as needed */
+  height: 100vh;
+  background-color: #ffffff; /* White background */
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #e0e0e0; /* Optional: adds a border to the right */
+  z-index: 1000;
+}
+
+.sidebar-logo-container {
+  text-align: center;
+  margin-bottom: 30px; /* Space below the logo */
+}
+
+.sidebar-logo {
+  max-width: 150px; /* Adjust size as needed */
+  height: auto;
+}
+
+.sidebar-nav ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center; /* Center items horizontally */
+}
+
+.sidebar-nav li {
+  width: 100%;
+  margin-bottom: 15px; /* Space between nav items */
+}
+
+.sidebar-nav li a {
+  display: flex;
+  align-items: center; /* Vertically align icon and text */
+  text-decoration: none;
+  color: #333; /* Dark grey text color */
+  padding: 10px 15px; /* Padding for clickable area */
+  border-radius: 5px; /* Slightly rounded corners for links */
+  transition: background-color 0.3s ease;
+  width: calc(100% - 30px); /* Adjust width considering padding */
+  justify-content: flex-start; /* Align items to the start (icon then text) */
+  font-size: 0.9em; /* Slightly reduce font size */
+  font-weight: 500; /* Set font weight to medium */
+}
+
+.sidebar-nav li a:hover {
+  background-color: #e9ecef; /* Light hover effect */
+  color: #007bff; /* Change text color on hover, optional */
+}
+
+.sidebar-nav li a span {
+  margin-right: 10px; /* Space between icon and text */
+  /* Placeholder for icon styling if using font icons or SVGs directly */
+}
+
+.nav-icon {
+  margin-right: 10px; /* Space between icon and text */
+  width: 20px; /* Adjust icon size as needed */
+  height: 20px; /* Adjust icon size as needed */
+}
+
+/* Example: Active link styling (you'll need JS to set this dynamically) */
+.sidebar-nav li a.active {
+  background-color: #D5D9EA; /* Updated highlight color */
+  color: #333; /* Adjust text color for better contrast if needed */
+}
+
+.sidebar-profile-section { /* New wrapper class */
+  margin-top: auto; /* Pushes this section to the bottom */
+  padding-bottom: 20px; /* Add padding at the bottom */
+}
+
+.sidebar-divider {
+  height: 1px;
+  background-color: #e0e0e0;
+  margin: 20px 0;
+}
+
+.sidebar-profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 15px;
+  margin-bottom: 20px;
+}
+
+.sidebar-profile .profile-picture {
+  flex-shrink: 0;
+}
+
+.sidebar-profile .profile-image {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.sidebar-profile .profile-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+  align-items: flex-start;
+}
+
+.sidebar-profile .profile-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: #333;
+  line-height: 1.1;
+  text-align: left;
+  margin: 0;
+}
+
+.sidebar-profile .profile-role {
+  font-size: 9px;
+  font-weight: 400;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  text-align: left;
+  margin: 0;
+}

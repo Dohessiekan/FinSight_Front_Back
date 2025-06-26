@@ -1,7 +1,20 @@
 .App {
-  text-align: center;
+  text-align: center; /* This might be overridden by specific component styles */
 }
 
+.main-content {
+  margin-left: 290px; /* 250px width + 20px left padding + 20px right padding */
+  padding: 20px;
+  min-height: 100vh;
+  /* Add other styling for your main content area as needed */
+  text-align: left; /* Align content to the left for readability */
+  background-color: #f4f6f8; /* Light grey background from original sidebar */
+}
+
+/* Remove or adjust default App.js styles if they conflict */
+/* For example, if you have App-header, App-logo, App-link styles you might not need them in this layout */
+
+/*
 .App-logo {
   height: 40vmin;
   pointer-events: none;
@@ -36,3 +49,4 @@
     transform: rotate(360deg);
   }
 }
+*/
