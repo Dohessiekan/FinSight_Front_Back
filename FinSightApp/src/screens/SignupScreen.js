@@ -16,6 +16,7 @@ import Button from '../components/Button';
 import colors from '../theme/colors';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
+import FirebaseService from '../services/FirebaseService';
 
 export default function SignupScreen({ navigation }) {
   const [name, setName] = useState('');
@@ -55,12 +56,26 @@ export default function SignupScreen({ navigation }) {
     try {
       const result = await signUp(email, password, name);
       if (result.success) {
+        // Create user profile with account creation date
+        const profileData = {
+          name: name,
+          email: email,
+          phone: '+250 788 123 456',
+          location: 'Kigali, Rwanda',
+          bio: 'FinSight user | Managing finances smartly',
+          accountCreated: new Date(), // Store the account creation date
+        };
+        
+        // Create the user profile in Firestore
+        await FirebaseService.createUserProfile(result.user.uid, profileData);
+        
         Alert.alert('Success', 'Account created successfully!');
         // Navigation will be handled automatically by AuthContext
       } else {
         Alert.alert('Sign Up Failed', result.error);
       }
     } catch (error) {
+      console.error('Signup error:', error);
       Alert.alert('Error', 'Something went wrong. Please try again.');
     } finally {
       setIsLoading(false);

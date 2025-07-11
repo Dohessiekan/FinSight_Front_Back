@@ -32,6 +32,54 @@ export default function ProfileScreen({ navigation }) {
     bio: 'FinSight user | Managing finances smartly',
   });
 
+  // Function to format the member since date
+  const getMemberSinceDate = () => {
+    // Try to get creation date from different sources in order of preference
+    let creationDate = null;
+    
+    // 1. From Firebase Auth metadata (most reliable)
+    if (user?.metadata?.creationTime) {
+      creationDate = new Date(user.metadata.creationTime);
+    }
+    // 2. From user profile document's createdAt field
+    else if (userData?.createdAt) {
+      creationDate = userData.createdAt.toDate ? userData.createdAt.toDate() : new Date(userData.createdAt);
+    }
+    // 3. From user profile document's accountCreated field
+    else if (userData?.accountCreated) {
+      creationDate = userData.accountCreated.toDate ? userData.accountCreated.toDate() : new Date(userData.accountCreated);
+    }
+    
+    // Format the date or use fallback
+    if (creationDate && !isNaN(creationDate.getTime())) {
+      const now = new Date();
+      const diffTime = Math.abs(now - creationDate);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      // If account is very new (less than 30 days), show more specific info
+      if (diffDays < 30) {
+        if (diffDays === 0) {
+          return 'Member since today';
+        } else if (diffDays === 1) {
+          return 'Member since yesterday';
+        } else if (diffDays < 7) {
+          return `Member since ${diffDays} days ago`;
+        } else {
+          const weeks = Math.floor(diffDays / 7);
+          return `Member since ${weeks} week${weeks > 1 ? 's' : ''} ago`;
+        }
+      } else {
+        // For older accounts, show month and year
+        const options = { year: 'numeric', month: 'short' };
+        const formattedDate = creationDate.toLocaleDateString('en-US', options);
+        return `Member since ${formattedDate}`;
+      }
+    }
+    
+    // Fallback if no valid date is found
+    return 'Member since Jan 2020';
+  };
+
   // Load user profile from Firebase
   const loadUserProfile = async () => {
     if (!user) return;
@@ -46,6 +94,24 @@ export default function ProfileScreen({ navigation }) {
           name: user.displayName || result.data.name || prevData.name,
           email: user.email || result.data.email || prevData.email
         }));
+      } else {
+        // If no profile exists, create one with account creation date
+        const profileData = {
+          name: user.displayName || userData.name,
+          email: user.email || userData.email,
+          phone: userData.phone,
+          location: userData.location,
+          bio: userData.bio,
+          accountCreated: user.metadata?.creationTime ? new Date(user.metadata.creationTime) : new Date()
+        };
+        
+        const createResult = await FirebaseService.createUserProfile(user.uid, profileData);
+        if (createResult.success) {
+          setUserData(prevData => ({
+            ...prevData,
+            ...profileData
+          }));
+        }
       }
     } catch (error) {
       console.error('Error loading profile:', error);
@@ -302,7 +368,7 @@ export default function ProfileScreen({ navigation }) {
             
             <View style={styles.infoItem}>
               <Ionicons name="calendar-outline" size={24} color={colors.primary} />
-              <Text style={styles.infoText}>Member since Jan 2020</Text>
+              <Text style={styles.infoText}>{getMemberSinceDate()}</Text>
             </View>
           </View>
 
