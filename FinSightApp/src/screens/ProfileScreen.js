@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   View, 
   Text, 
@@ -7,47 +7,128 @@ import {
   ScrollView, 
   TouchableOpacity, 
   TextInput, 
-  Share, 
   KeyboardAvoidingView, 
   Platform,
   Keyboard,
-  StatusBar
+  StatusBar,
+  SafeAreaView,
+  Alert
 } from 'react-native';
-import Button from '../components/Button';
 import colors from '../theme/colors';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../contexts/AuthContext';
+import FirebaseService from '../services/FirebaseService';
+import Button from '../components/Button';
 
 export default function ProfileScreen({ navigation }) {
+  const { user, signOut } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [userData, setUserData] = useState({
-    name: 'John Doe',
-    email: 'johndoe@email.com',
-    phone: '+1 (555) 123-4567',
-    location: 'San Francisco, CA',
-    bio: 'Senior UX Designer | Photography enthusiast | Coffee lover',
+    name: user?.displayName || 'User',
+    email: user?.email || 'user@email.com',
+    phone: '+250 788 123 456',
+    location: 'Kigali, Rwanda',
+    bio: 'FinSight user | Managing finances smartly',
   });
+
+  // Load user profile from Firebase
+  const loadUserProfile = async () => {
+    if (!user) return;
+    
+    setLoading(true);
+    try {
+      const result = await FirebaseService.getUserProfile(user.uid);
+      if (result.success && result.data) {
+        setUserData(prevData => ({
+          ...prevData,
+          ...result.data,
+          name: user.displayName || result.data.name || prevData.name,
+          email: user.email || result.data.email || prevData.email
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading profile:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      loadUserProfile();
+    }
+  }, [user]);
 
   const handleEditToggle = () => setIsEditing(!isEditing);
   
-  const handleSave = () => {
-    setIsEditing(false);
-    console.log('Profile saved:', userData);
+  const handleSave = async () => {
+    if (!user) return;
+    
+    setLoading(true);
+    try {
+      const result = await FirebaseService.updateUserProfile(user.uid, {
+        phone: userData.phone,
+        location: userData.location,
+        bio: userData.bio
+      });
+      
+      if (result.success) {
+        setIsEditing(false);
+        Alert.alert('Success', 'Profile updated successfully!');
+      } else {
+        Alert.alert('Error', 'Failed to update profile');
+      }
+    } catch (error) {
+      console.error('Error saving profile:', error);
+      Alert.alert('Error', 'Failed to update profile');
+    } finally {
+      setLoading(false);
+    }
   };
 
+  const handleSignOut = () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out of your account?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              const result = await signOut();
+              if (!result.success) {
+                Alert.alert(
+                  'Sign Out Failed', 
+                  result.error || 'Failed to sign out. Please try again.',
+                  [{ text: 'OK' }]
+                );
+              }
+              // If successful, the AuthContext will handle navigation automatically
+            } catch (error) {
+              console.error('Sign out error:', error);
+              Alert.alert(
+                'Error', 
+                'An unexpected error occurred. Please try again.',
+                [{ text: 'OK' }]
+              );
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+  
   const handleChange = (field, value) => {
     setUserData(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handleShare = async () => {
-    try {
-      await Share.share({
-        title: `${userData.name}'s Profile`,
-        message: `Check out ${userData.name}'s profile!\n\nEmail: ${userData.email}\nLocation: ${userData.location}\nBio: ${userData.bio}`,
-        url: 'https://yourapp.com/profile',
-      });
-    } catch (error) {
-      console.error('Error sharing profile:', error.message);
-    }
   };
 
   // Create refs for input fields
@@ -65,18 +146,25 @@ export default function ProfileScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.container}>
-      {/* Fixed Header */}
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      
+      {/* Standardized Header */}
       <View style={styles.header}>
-        <StatusBar backgroundColor={colors.primary} barStyle="light-content" />
-        <TouchableOpacity onPress={() => navigation.navigate('Dashboard')}>
-          <Ionicons name="arrow-back" size={28} color={colors.white} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Profile</Text>
-        <TouchableOpacity onPress={isEditing ? handleSave : handleEditToggle}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.greeting}>Profile</Text>
+          <Text style={styles.subtitle}>Manage your account settings</Text>
+        </View>
+        <TouchableOpacity 
+          style={[
+            styles.editButton,
+            isEditing && styles.saveButton
+          ]}
+          onPress={isEditing ? handleSave : handleEditToggle}
+        >
           <Ionicons 
-            name={isEditing ? "save" : "settings-outline"} 
-            size={28} 
+            name={isEditing ? "checkmark" : "settings"} 
+            size={20} 
             color={colors.white} 
           />
         </TouchableOpacity>
@@ -92,57 +180,61 @@ export default function ProfileScreen({ navigation }) {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Profile Card */}
+          {/* Compact Profile Card */}
           <View style={styles.profileCard}>
-            <View style={styles.avatarContainer}>
-              <Image 
-                source={require('../../assets/icon.png')} 
-                style={styles.avatar} 
-              />
-              {isEditing && (
-                <TouchableOpacity 
-                  style={styles.editIcon} 
-                  onPress={() => alert('Image upload would be implemented here')}
-                >
-                  <Ionicons name="camera" size={18} color={colors.white} />
-                </TouchableOpacity>
-              )}
-            </View>
-            
-            {isEditing ? (
-              <TextInput
-                ref={nameRef}
-                style={[styles.title, styles.input]}
-                value={userData.name}
-                onChangeText={(text) => handleChange('name', text)}
-                placeholder="Full Name"
-                placeholderTextColor={colors.textSecondary}
-                returnKeyType="next"
-                onSubmitEditing={() => focusNextField(emailRef)}
-              />
-            ) : (
-              <Text style={styles.title}>{userData.name}</Text>
-            )}
-            
-            {isEditing ? (
-              <TextInput
-                ref={emailRef}
-                style={[styles.label, styles.input]}
-                value={userData.email}
-                onChangeText={(text) => handleChange('email', text)}
-                placeholder="Email"
-                placeholderTextColor={colors.textSecondary}
-                keyboardType="email-address"
-                returnKeyType="next"
-                onSubmitEditing={() => focusNextField(bioRef)}
-              />
-            ) : (
-              <Text style={styles.label}>{userData.email}</Text>
-            )}
-            
-            <View style={styles.statusContainer}>
-              <Ionicons name="ios-shield-checkmark" size={22} color={colors.success} />
-              <Text style={styles.status}>Verified User</Text>
+            <View style={styles.profileContent}>
+              <View style={styles.avatarContainer}>
+                <Image 
+                  source={require('../../assets/icon.png')} 
+                  style={styles.avatar} 
+                />
+                {isEditing && (
+                  <TouchableOpacity 
+                    style={styles.editIcon} 
+                    onPress={() => alert('Image upload would be implemented here')}
+                  >
+                    <Ionicons name="camera" size={14} color={colors.white} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              
+              <View style={styles.profileInfo}>
+                {isEditing ? (
+                  <TextInput
+                    ref={nameRef}
+                    style={[styles.nameText, styles.input]}
+                    value={userData.name}
+                    onChangeText={(text) => handleChange('name', text)}
+                    placeholder="Full Name"
+                    placeholderTextColor={colors.textSecondary}
+                    returnKeyType="next"
+                    onSubmitEditing={() => focusNextField(emailRef)}
+                  />
+                ) : (
+                  <Text style={styles.nameText}>{userData.name}</Text>
+                )}
+                
+                {isEditing ? (
+                  <TextInput
+                    ref={emailRef}
+                    style={[styles.emailText, styles.input]}
+                    value={userData.email}
+                    onChangeText={(text) => handleChange('email', text)}
+                    placeholder="Email"
+                    placeholderTextColor={colors.textSecondary}
+                    keyboardType="email-address"
+                    returnKeyType="next"
+                    onSubmitEditing={() => focusNextField(bioRef)}
+                  />
+                ) : (
+                  <Text style={styles.emailText}>{userData.email}</Text>
+                )}
+                
+                <View style={styles.verifiedContainer}>
+                  <Ionicons name="shield-checkmark" size={16} color={colors.success} />
+                  <Text style={styles.verifiedText}>Verified</Text>
+                </View>
+              </View>
             </View>
           </View>
 
@@ -165,22 +257,6 @@ export default function ProfileScreen({ navigation }) {
             ) : (
               <Text style={styles.bioText}>{userData.bio}</Text>
             )}
-          </View>
-
-          {/* Stats Section */}
-          <View style={styles.statsContainer}>
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>42</Text>
-              <Text style={styles.statLabel}>Projects</Text>
-            </View>
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>128</Text>
-              <Text style={styles.statLabel}>Connections</Text>
-            </View>
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>89</Text>
-              <Text style={styles.statLabel}>Kudos</Text>
-            </View>
           </View>
 
           {/* Additional Info */}
@@ -230,23 +306,71 @@ export default function ProfileScreen({ navigation }) {
             </View>
           </View>
 
-          {/* Action Buttons */}
-          <View style={styles.buttonContainer}>
-            <Button 
-              title={isEditing ? "Cancel" : "Edit Profile"} 
-              style={isEditing ? styles.cancelButton : styles.outlineButton}
-              textStyle={isEditing ? styles.cancelButtonText : styles.outlineButtonText}
-              onPress={() => isEditing ? setIsEditing(false) : handleEditToggle()}
-            />
-            <Button 
-              title="Share Profile" 
-              icon="share-social-outline"
-              onPress={handleShare}
+          {/* Account Actions */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Account</Text>
+            
+            <TouchableOpacity 
+              style={styles.actionItem}
+              onPress={() => {
+                // For now, show an alert since these screens might not exist yet
+                Alert.alert(
+                  'Coming Soon',
+                  'Settings page will be available in a future update.',
+                  [{ text: 'OK' }]
+                );
+              }}
+            >
+              <Ionicons name="settings-outline" size={24} color={colors.primary} />
+              <Text style={styles.actionText}>Settings</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.actionItem}
+              onPress={() => {
+                Alert.alert(
+                  'Coming Soon',
+                  'Help & Support page will be available in a future update.',
+                  [{ text: 'OK' }]
+                );
+              }}
+            >
+              <Ionicons name="help-circle-outline" size={24} color={colors.primary} />
+              <Text style={styles.actionText}>Help & Support</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.actionItem}
+              onPress={() => {
+                Alert.alert(
+                  'Coming Soon',
+                  'Privacy Policy page will be available in a future update.',
+                  [{ text: 'OK' }]
+                );
+              }}
+            >
+              <Ionicons name="shield-outline" size={24} color={colors.primary} />
+              <Text style={styles.actionText}>Privacy Policy</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Sign Out Button */}
+          <View style={styles.signOutSection}>
+            <Button
+              title="Sign Out"
+              onPress={handleSignOut}
+              variant="danger"
+              style={styles.signOutButton}
+              loading={loading}
+              icon="log-out-outline"
             />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -259,123 +383,129 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
+    backgroundColor: colors.surface,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
-    paddingTop: Platform.OS === 'ios' ? 50 : 30,
-    backgroundColor: colors.primary,
-    width: '100%',
-    zIndex: 10,
   },
-  headerTitle: {
-    fontSize: 22,
+  headerLeft: {
+    flex: 1,
+  },
+  greeting: {
+    fontSize: 24,
     fontWeight: '700',
-    color: colors.white,
+    color: colors.text,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginTop: 4,
+  },
+  editButton: {
+    backgroundColor: colors.primary,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  saveButton: {
+    backgroundColor: colors.success,
+    shadowColor: colors.success,
   },
   scrollContainer: {
-    padding: 20,
+    flexGrow: 1,
+    paddingHorizontal: 24,
     paddingTop: 20,
     paddingBottom: 40,
   },
   profileCard: {
-    alignItems: 'center',
-    backgroundColor: colors.card,
-    borderRadius: 28,
-    padding: 32,
-    paddingTop: 50,
-    marginBottom: 24,
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  profileContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   avatarContainer: {
     position: 'relative',
-    marginBottom: 20,
+    marginRight: 16,
   },
   avatar: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 4,
-    borderColor: colors.white,
-    backgroundColor: colors.lightGray,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 2,
+    borderColor: colors.border,
+    backgroundColor: colors.gray100,
   },
   editIcon: {
     position: 'absolute',
-    bottom: 8,
-    right: 8,
+    bottom: 0,
+    right: 0,
     backgroundColor: colors.primary,
-    borderRadius: 20,
-    padding: 6,
+    borderRadius: 12,
+    padding: 4,
+    borderWidth: 2,
+    borderColor: colors.surface,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: colors.textDark,
+  profileInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  nameText: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
     marginBottom: 4,
-    textAlign: 'center',
   },
-  label: {
-    fontSize: 16,
+  emailText: {
+    fontSize: 14,
     color: colors.textSecondary,
-    marginBottom: 16,
-    textAlign: 'center',
+    marginBottom: 8,
   },
-  statusContainer: {
+  verifiedContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.successLight,
-    borderRadius: 20,
-    paddingVertical: 6,
-    paddingHorizontal: 16,
-    marginTop: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
   },
-  status: {
-    fontSize: 15,
+  verifiedText: {
+    fontSize: 12,
     color: colors.success,
     fontWeight: '600',
-    marginLeft: 8,
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: colors.card,
-    borderRadius: 20,
-    padding: 24,
-    marginBottom: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  statItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: colors.primary,
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 14,
-    color: colors.textSecondary,
+    marginLeft: 4,
   },
   section: {
-    backgroundColor: colors.card,
-    borderRadius: 20,
-    padding: 24,
-    marginBottom: 24,
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
     shadowRadius: 8,
-    elevation: 4,
+    elevation: 3,
   },
   sectionTitle: {
     fontSize: 18,
@@ -388,7 +518,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+    borderBottomColor: colors.border,
   },
   infoText: {
     fontSize: 16,
@@ -406,34 +536,31 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   input: {
-    backgroundColor: colors.inputBackground,
+    backgroundColor: colors.surface,
     borderRadius: 12,
     padding: 12,
     borderWidth: 1,
-    borderColor: colors.borderLight,
+    borderColor: colors.border,
     fontSize: 16,
     color: colors.text,
   },
-  buttonContainer: {
+  actionItem: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 16,
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  actionText: {
+    fontSize: 16,
+    color: colors.text,
+    marginLeft: 16,
+    flex: 1,
+  },
+  signOutSection: {
+    marginBottom: 20,
+  },
+  signOutButton: {
     marginTop: 10,
-  },
-  outlineButton: {
-    backgroundColor: 'transparent',
-    borderWidth: 2,
-    borderColor: colors.primary,
-    flex: 1,
-  },
-  outlineButtonText: {
-    color: colors.primary,
-  },
-  cancelButton: {
-    backgroundColor: colors.dangerLight,
-    flex: 1,
-  },
-  cancelButtonText: {
-    color: colors.danger,
   },
 });

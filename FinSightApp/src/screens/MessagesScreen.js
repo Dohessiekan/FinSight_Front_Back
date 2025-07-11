@@ -1,9 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, PermissionsAndroid, Platform, TextInput, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, PermissionsAndroid, Platform, TextInput, Keyboard, SafeAreaView, StatusBar, Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Card from '../components/Card';
 import colors from '../theme/colors';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { analyzeMessages } from '../utils/api';
+import { useAuth } from '../contexts/AuthContext';
+import { db } from '../config/firebase';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  updateDoc, 
+  query, 
+  where, 
+  orderBy, 
+  limit, 
+  onSnapshot,
+  serverTimestamp
+} from 'firebase/firestore';
 
 let SmsAndroid;
 if (Platform.OS === 'android') {
@@ -98,6 +113,7 @@ const scanSmsMessages = async () => {
 };
 
 export default function MessagesScreen() {
+  const { user } = useAuth();
   const [messages, setMessages] = useState([]);
   const [activeFilter, setActiveFilter] = useState('all');
   const [loading, setLoading] = useState(false);
@@ -105,6 +121,158 @@ export default function MessagesScreen() {
   const [iosInput, setIosInput] = useState('');
   const [iosLoading, setIosLoading] = useState(false);
   const [iosResult, setIosResult] = useState(null);
+  const [isOffline, setIsOffline] = useState(false);
+
+  // Cache keys for offline storage
+  const MESSAGES_CACHE_KEY = `messages_${user?.uid || 'guest'}`;
+
+  // Utility function to check if error is due to Firebase being offline
+  const isFirebaseOfflineError = (error) => {
+    return error?.message?.includes('client is offline') || 
+           error?.code === 'unavailable';
+  };
+
+  // Cache management functions
+  const saveToCache = async (key, data) => {
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(data));
+    } catch (error) {
+      console.error('Error saving to cache:', error);
+    }
+  };
+
+  const loadFromCache = async (key) => {
+    try {
+      const cachedData = await AsyncStorage.getItem(key);
+      return cachedData ? JSON.parse(cachedData) : null;
+    } catch (error) {
+      console.error('Error loading from cache:', error);
+      return null;
+    }
+  };
+
+  // Firebase functions for message management
+  const saveMessageToFirebase = async (message) => {
+    if (!user) return;
+    
+    try {
+      const messagesRef = collection(db, 'users', user.uid, 'messages');
+      await addDoc(messagesRef, {
+        ...message,
+        userId: user.uid,
+        createdAt: serverTimestamp(),
+        processed: true
+      });
+      
+      // Update cache after successful save
+      const updatedMessages = [message, ...messages];
+      await saveToCache(MESSAGES_CACHE_KEY, updatedMessages);
+      
+    } catch (error) {
+      console.error('Error saving message:', error);
+      
+      if (isFirebaseOfflineError(error)) {
+        setIsOffline(true);
+        console.log('Firebase offline: Message will be cached for later sync');
+        // For offline scenarios, just update local state
+        const updatedMessages = [message, ...messages];
+        setMessages(updatedMessages);
+        await saveToCache(MESSAGES_CACHE_KEY, updatedMessages);
+      }
+    }
+  };
+
+  const updateMessageStatus = async (messageId, newStatus) => {
+    if (!user) return;
+    
+    try {
+      const messageRef = doc(db, 'users', user.uid, 'messages', messageId);
+      await updateDoc(messageRef, {
+        status: newStatus,
+        updatedAt: serverTimestamp()
+      });
+      
+      // Update local state and cache
+      const updatedMessages = messages.map(msg => 
+        msg.id === messageId ? { ...msg, status: newStatus } : msg
+      );
+      setMessages(updatedMessages);
+      await saveToCache(MESSAGES_CACHE_KEY, updatedMessages);
+      
+    } catch (error) {
+      console.error('Error updating message status:', error);
+      
+      if (isFirebaseOfflineError(error)) {
+        setIsOffline(true);
+        console.log('Firebase offline: Status update will be cached for later sync');
+        // Update local state when offline
+        const updatedMessages = messages.map(msg => 
+          msg.id === messageId ? { ...msg, status: newStatus } : msg
+        );
+        setMessages(updatedMessages);
+        await saveToCache(MESSAGES_CACHE_KEY, updatedMessages);
+      }
+    }
+  };
+
+  const loadMessagesFromFirebase = async () => {
+    if (!user) return;
+    
+    // Load cached data first
+    const cachedMessages = await loadFromCache(MESSAGES_CACHE_KEY);
+    if (cachedMessages && cachedMessages.length > 0) {
+      setMessages(cachedMessages);
+    }
+    
+    try {
+      const messagesRef = collection(db, 'users', user.uid, 'messages');
+      const q = query(messagesRef, orderBy('createdAt', 'desc'), limit(100));
+      
+      const unsubscribe = onSnapshot(q, async (snapshot) => {
+        const firebaseMessages = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        setMessages(firebaseMessages);
+        setIsOffline(false);
+        
+        // Cache the updated messages
+        await saveToCache(MESSAGES_CACHE_KEY, firebaseMessages);
+      }, (error) => {
+        console.error('Error in messages listener:', error);
+        
+        if (isFirebaseOfflineError(error)) {
+          setIsOffline(true);
+          console.log('Firebase offline: Using cached messages');
+          // Keep using cached data when offline
+        }
+      });
+
+      return unsubscribe;
+    } catch (error) {
+      console.error('Error loading messages:', error);
+      
+      if (isFirebaseOfflineError(error)) {
+        setIsOffline(true);
+        console.log('Firebase offline: Using cached messages');
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      let unsubscribe;
+      
+      const setupMessagesListener = async () => {
+        unsubscribe = await loadMessagesFromFirebase();
+      };
+      
+      setupMessagesListener();
+      
+      return () => unsubscribe && unsubscribe();
+    }
+  }, [user]);
   
   // Calculate statistics
   const totalMessages = messages.length;
@@ -117,6 +285,11 @@ export default function MessagesScreen() {
     : messages.filter(msg => msg.status === activeFilter);
   
   const handleScanPress = async () => {
+    if (!user) {
+      Alert.alert('Authentication Required', 'Please sign in to scan messages');
+      return;
+    }
+
     setLoading(true);
     try {
       const scannedMessages = await scanSmsMessages();
@@ -127,11 +300,30 @@ export default function MessagesScreen() {
       const transactionMessages = scannedMessages.filter(m =>
         transactionKeywords.some(keyword => m.text && m.text.toLowerCase().includes(keyword))
       );
-      setMessages(transactionMessages); // Only display transaction messages
-      setScanComplete(true);
+      
+      // Analyze messages with API for better fraud detection
+      try {
+        const analyzedMessages = await analyzeMessages(transactionMessages);
+        
+        // Save each analyzed message to Firebase
+        for (const message of analyzedMessages) {
+          await saveMessageToFirebase(message);
+        }
+        
+        setScanComplete(true);
+      } catch (apiError) {
+        console.log('API analysis failed, using basic analysis:', apiError);
+        
+        // Save unanalyzed messages to Firebase as fallback
+        for (const message of transactionMessages) {
+          await saveMessageToFirebase(message);
+        }
+        
+        setScanComplete(true);
+      }
     } catch (error) {
       console.error('Scan failed:', error);
-      alert('SMS scan failed. Please try again.');
+      Alert.alert('Scan Failed', 'SMS scan failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -140,13 +332,25 @@ export default function MessagesScreen() {
   // Add handler for iOS paste/scan
   const handleIosScan = async () => {
     if (!iosInput.trim()) return;
+    if (!user) {
+      Alert.alert('Authentication Required', 'Please sign in to analyze messages');
+      return;
+    }
+
     setIosLoading(true);
     setIosResult(null);
     try {
       const analyzed = await analyzeMessages([{ id: 'ios', text: iosInput }]);
-      setIosResult(analyzed[0]);
+      const analyzedMessage = analyzed[0];
+      
+      // Save the analyzed message to Firebase
+      await saveMessageToFirebase(analyzedMessage);
+      
+      setIosResult(analyzedMessage);
     } catch (e) {
-      setIosResult({ status: 'suspicious', analysis: 'API error' });
+      const fallbackResult = { status: 'suspicious', analysis: 'API error' };
+      await saveMessageToFirebase({ id: 'ios', text: iosInput, ...fallbackResult });
+      setIosResult(fallbackResult);
     } finally {
       setIosLoading(false);
       Keyboard.dismiss();
@@ -188,45 +392,14 @@ export default function MessagesScreen() {
     }
   };
 
-  const renderMessageDetails = (item) => (
-    <View style={styles.detailsContainer}>
-      <View style={styles.detailRow}>
-        <Text style={styles.detailLabel}>Sender:</Text>
-        <Text style={styles.detailValue}>{item.sender || 'Unknown'}</Text>
-      </View>
-      
-      <View style={styles.detailRow}>
-        <Text style={styles.detailLabel}>Analysis:</Text>
-        <Text style={styles.detailValue}>{item.analysis || 'No analysis available'}</Text>
-      </View>
-      
-      <View style={styles.detailRow}>
-        <Text style={styles.detailLabel}>Risk Level:</Text>
-        <Text style={[
-          styles.riskLevel,
-          item.status === 'safe' && { color: colors.success },
-          item.status === 'suspicious' && { color: colors.warning },
-          item.status === 'fraud' && { color: colors.danger }
-        ]}>
-          {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-        </Text>
-      </View>
-      
-      {item.status !== 'safe' && (
-        <TouchableOpacity style={styles.reportButton}>
-          <Text style={styles.reportButtonText}>Report to Authorities</Text>
-        </TouchableOpacity>
-      )}
-    </View>
-  );
-
   return (
-    <View style={styles.container}>
-      {/* Header */}
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      {/* Standardized Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>SMS Fraud Guard</Text>
-          <Text style={styles.subtitle}>Real-time SMS monitoring & protection</Text>
+        <View style={styles.headerLeft}>
+          <Text style={styles.greeting}>Messages</Text>
+          <Text style={styles.subtitle}>SMS fraud detection & monitoring</Text>
         </View>
         <TouchableOpacity 
           style={styles.scanButton}
@@ -234,15 +407,22 @@ export default function MessagesScreen() {
           disabled={loading}
         >
           {loading ? (
-            <ActivityIndicator color={colors.white} />
+            <ActivityIndicator color={colors.white} size="small" />
           ) : (
-            <>
-              <Ionicons name="scan" size={24} color={colors.white} />
-              <Text style={styles.scanButtonText}>Scan Now</Text>
-            </>
+            <Ionicons name="scan" size={20} color={colors.white} />
           )}
         </TouchableOpacity>
       </View>
+      
+      {/* Offline Indicator */}
+      {isOffline && (
+        <View style={styles.offlineIndicator}>
+          <Ionicons name="cloud-offline" size={16} color={colors.warning} />
+          <Text style={styles.offlineText}>
+            Using cached data - Some features may be limited
+          </Text>
+        </View>
+      )}
       
       {/* Stats Summary */}
       <View style={styles.statsContainer}>
@@ -256,7 +436,7 @@ export default function MessagesScreen() {
         </View>
         <View style={styles.statCard}>
           <Text style={[styles.statNumber, { color: colors.warning }]}>{suspiciousCount}</Text>
-          <Text style={styles.statLabel}>Suspicious</Text>
+          <Text style={styles.statLabel}>Alerts</Text>
         </View>
         <View style={styles.statCard}>
           <Text style={[styles.statNumber, { color: colors.danger }]}>{fraudCount}</Text>
@@ -278,28 +458,28 @@ export default function MessagesScreen() {
           style={[styles.filterButton, activeFilter === 'all' && styles.activeFilter]}
           onPress={() => setActiveFilter('all')}
         >
-          <Text style={[styles.filterText, activeFilter === 'all' && styles.activeFilterText]}>All</Text>
+          <Text style={[styles.filterText, activeFilter === 'all' && styles.activeFilterText]} numberOfLines={1}>All</Text>
         </TouchableOpacity>
         <TouchableOpacity 
           style={[styles.filterButton, activeFilter === 'safe' && styles.activeFilter]}
           onPress={() => setActiveFilter('safe')}
         >
-          <Ionicons name="shield-checkmark" size={16} color={activeFilter === 'safe' ? colors.white : colors.success} />
-          <Text style={[styles.filterText, activeFilter === 'safe' && styles.activeFilterText]}>Safe</Text>
+          <Ionicons name="shield-checkmark" size={14} color={activeFilter === 'safe' ? colors.white : colors.success} />
+          <Text style={[styles.filterText, activeFilter === 'safe' && styles.activeFilterText]} numberOfLines={1}>Safe</Text>
         </TouchableOpacity>
         <TouchableOpacity 
           style={[styles.filterButton, activeFilter === 'suspicious' && styles.activeFilter]}
           onPress={() => setActiveFilter('suspicious')}
         >
-          <Ionicons name="warning" size={16} color={activeFilter === 'suspicious' ? colors.white : colors.warning} />
-          <Text style={[styles.filterText, activeFilter === 'suspicious' && styles.activeFilterText]}>Suspicious</Text>
+          <Ionicons name="warning" size={14} color={activeFilter === 'suspicious' ? colors.white : colors.warning} />
+          <Text style={[styles.filterText, activeFilter === 'suspicious' && styles.activeFilterText]} numberOfLines={1}>Alert</Text>
         </TouchableOpacity>
         <TouchableOpacity 
           style={[styles.filterButton, activeFilter === 'fraud' && styles.activeFilter]}
           onPress={() => setActiveFilter('fraud')}
         >
-          <Ionicons name="alert-circle" size={16} color={activeFilter === 'fraud' ? colors.white : colors.danger} />
-          <Text style={[styles.filterText, activeFilter === 'fraud' && styles.activeFilterText]}>Fraud</Text>
+          <Ionicons name="alert-circle" size={14} color={activeFilter === 'fraud' ? colors.white : colors.danger} />
+          <Text style={[styles.filterText, activeFilter === 'fraud' && styles.activeFilterText]} numberOfLines={1}>Fraud</Text>
         </TouchableOpacity>
       </View>
       
@@ -307,14 +487,18 @@ export default function MessagesScreen() {
       <FlatList
         data={filteredMessages}
         keyExtractor={item => item.id}
+        contentContainerStyle={styles.flatListContent}
+        showsVerticalScrollIndicator={false}
         renderItem={({ item }) => (
           <Card style={[
             styles.card,
+            item.status === 'safe' && styles.safeCard,
             item.status === 'suspicious' && styles.suspiciousCard,
             item.status === 'fraud' && styles.fraudCard
           ]}>
+            {/* Compact Header */}
             <View style={styles.messageHeader}>
-              <View style={styles.statusIndicator}>
+              <View style={styles.statusInfo}>
                 {getStatusIcon(item.status)}
                 <Text style={[
                   styles.statusText,
@@ -322,38 +506,44 @@ export default function MessagesScreen() {
                   item.status === 'suspicious' && { color: colors.warning },
                   item.status === 'fraud' && { color: colors.danger }
                 ]}>
-                  {getStatusText(item.status)}
+                  {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
                 </Text>
               </View>
               <Text style={styles.timestamp}>{item.timestamp}</Text>
             </View>
-            
-            <View style={styles.messageContent}>
-              <Text style={styles.messageText}>{item.text}</Text>
-              
-              {item.amount ? (
-                <View style={[
-                  styles.amountContainer,
-                  item.type === 'received' && { backgroundColor: colors.success + '20' },
-                  item.type === 'sent' && { backgroundColor: colors.primary + '20' }
-                ]}>
-                  {getTypeIcon(item.type)}
-                  <Text style={[
-                    styles.amountText,
-                    item.type === 'received' && { color: colors.success },
-                    item.type === 'sent' && { color: colors.primary }
+
+            {/* Message Content */}
+            <View style={styles.messageBody}>
+              <View style={styles.senderRow}>
+                <Text style={styles.senderName}>{item.sender || 'Unknown'}</Text>
+                {item.amount && (
+                  <View style={[
+                    styles.amountBadge,
+                    item.type === 'received' && styles.receivedBadge,
+                    item.type === 'sent' && styles.sentBadge
                   ]}>
-                    {item.amount}
-                  </Text>
-                </View>
-              ) : (
-                <TouchableOpacity style={styles.reportButton}>
-                  <Text style={styles.reportButtonText}>Report Fraud</Text>
-                </TouchableOpacity>
-              )}
+                    {getTypeIcon(item.type)}
+                    <Text style={[
+                      styles.amountText,
+                      item.type === 'received' && { color: colors.success },
+                      item.type === 'sent' && { color: colors.primary }
+                    ]}>
+                      {item.amount}
+                    </Text>
+                  </View>
+                )}
+              </View>
               
-              {/* Expanded details section */}
-              {renderMessageDetails(item)}
+              <Text style={styles.messageText} numberOfLines={2}>
+                {item.text}
+              </Text>
+              
+              {/* Only show analysis for suspicious/fraud messages */}
+              {item.status !== 'safe' && (
+                <Text style={styles.analysisText} numberOfLines={1}>
+                  {item.analysis || 'No analysis available'}
+                </Text>
+              )}
             </View>
           </Card>
         )}
@@ -396,7 +586,7 @@ export default function MessagesScreen() {
           )}
         </View>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -404,17 +594,24 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
-    padding: 16,
   },
   header: {
+    backgroundColor: colors.surface,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 24,
   },
-  title: {
+  headerLeft: {
+    flex: 1,
+  },
+  greeting: {
     fontSize: 24,
-    fontWeight: '800',
+    fontWeight: '700',
     color: colors.text,
   },
   subtitle: {
@@ -423,33 +620,32 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   scanButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: colors.primary,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    gap: 8,
-    minWidth: 120,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
-  },
-  scanButtonText: {
-    color: colors.white,
-    fontWeight: '600',
-    fontSize: 14,
+    alignItems: 'center',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
   },
   statsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 16,
+    paddingHorizontal: 24,
+    marginTop: 16,
   },
   statCard: {
     alignItems: 'center',
-    backgroundColor: colors.backgroundLight,
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    padding: 12,
     flex: 1,
-    marginHorizontal: 4,
+    marginHorizontal: 2,
   },
   statNumber: {
     fontSize: 22,
@@ -466,54 +662,95 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
     gap: 8,
-    paddingHorizontal: 8,
+    paddingHorizontal: 24,
   },
   scanStatusText: {
     fontSize: 14,
     color: colors.textSecondary,
   },
+  offlineIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.warningBg || '#FFF3CD',
+    marginHorizontal: 24,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.warning,
+    gap: 8,
+  },
+  offlineText: {
+    fontSize: 14,
+    color: colors.warning,
+    flex: 1,
+  },
   filterContainer: {
     flexDirection: 'row',
-    backgroundColor: colors.backgroundLight,
+    backgroundColor: colors.surface,
     borderRadius: 12,
-    padding: 6,
-    marginBottom: 24,
+    padding: 8,
+    marginBottom: 16,
+    marginHorizontal: 24,
+    gap: 6,
   },
   filterButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
-    borderRadius: 10,
-    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    gap: 4,
+    backgroundColor: 'transparent',
+    minHeight: 44,
   },
   activeFilter: {
     backgroundColor: colors.primary,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
   },
   filterText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
     color: colors.textSecondary,
+    textAlign: 'center',
+    numberOfLines: 1,
   },
   activeFilterText: {
     color: colors.white,
   },
   card: {
-    borderRadius: 16,
+    borderRadius: 12,
     padding: 16,
-    marginBottom: 16,
-    backgroundColor: colors.backgroundLight,
-    borderLeftWidth: 4,
-    borderLeftColor: colors.primary,
+    marginBottom: 12,
+    backgroundColor: colors.surface,
+    marginHorizontal: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+    overflow: 'hidden',
+  },
+  safeCard: {
+    backgroundColor: colors.success + '05',
+    borderWidth: 1,
+    borderColor: colors.success + '20',
   },
   suspiciousCard: {
-    borderLeftColor: colors.warning,
-    backgroundColor: colors.warning + '10',
+    backgroundColor: colors.warning + '05',
+    borderWidth: 1,
+    borderColor: colors.warning + '20',
   },
   fraudCard: {
-    borderLeftColor: colors.danger,
-    backgroundColor: colors.danger + '10',
+    backgroundColor: colors.danger + '05',
+    borderWidth: 1,
+    borderColor: colors.danger + '20',
   },
   messageHeader: {
     flexDirection: 'row',
@@ -521,86 +758,79 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  statusIndicator: {
+  statusInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
   statusText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   timestamp: {
     fontSize: 12,
     color: colors.textSecondary,
   },
-  messageContent: {
-    gap: 12,
-  },
-  messageText: {
-    fontSize: 16,
-    color: colors.text,
-    lineHeight: 22,
-  },
-  amountContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+  messageBody: {
     gap: 8,
   },
-  amountText: {
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  reportButton: {
-    alignSelf: 'flex-start',
-    paddingVertical: 6,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    backgroundColor: colors.danger + '20',
-    borderWidth: 1,
-    borderColor: colors.danger,
-  },
-  reportButtonText: {
-    color: colors.danger,
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  detailsContainer: {
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    gap: 12,
-  },
-  detailRow: {
+  senderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
   },
-  detailLabel: {
+  senderName: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.textSecondary,
-    flex: 1,
+    color: colors.text,
   },
-  detailValue: {
+  amountBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
+  },
+  receivedBadge: {
+    backgroundColor: colors.success + '20',
+  },
+  sentBadge: {
+    backgroundColor: colors.primary + '20',
+  },
+  amountText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  messageText: {
     fontSize: 14,
     color: colors.text,
-    flex: 2,
-    textAlign: 'right',
+    lineHeight: 20,
+    backgroundColor: colors.background,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  riskLevel: {
-    fontSize: 14,
-    fontWeight: '700',
+  analysisText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+  flatListContent: {
+    paddingBottom: 100,
+    paddingTop: 8,
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 40,
+    marginTop: 60,
   },
   emptyIcon: {
     width: 120,
@@ -669,5 +899,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text,
     textAlign: 'center',
+  },
+  flatListContent: {
+    paddingBottom: 20,
   },
 });

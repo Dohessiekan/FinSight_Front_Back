@@ -1,194 +1,429 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, PermissionsAndroid, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  SafeAreaView,
+  StatusBar,
+  RefreshControl,
+  Dimensions,
+  Alert,
+} from 'react-native';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import Card from '../components/Card';
 import colors from '../theme/colors';
-import { Ionicons, MaterialIcons, MaterialCommunityIcons, AntDesign } from '@expo/vector-icons';
-import { analyzeMessages, getSmsSummary } from '../utils/api';
+import { getSmsSummary, analyzeMessages } from '../utils/api';
+import { useAuth } from '../contexts/AuthContext';
+import { db } from '../config/firebase';
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  setDoc, 
+  updateDoc, 
+  query, 
+  where, 
+  orderBy, 
+  limit, 
+  onSnapshot 
+} from 'firebase/firestore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-let SmsAndroid;
-if (Platform.OS === 'android') {
-  try {
-    SmsAndroid = require('react-native-get-sms-android');
-  } catch (e) {
-    SmsAndroid = null;
-  }
-}
-
-const scanSmsMessages = async () => {
-  if (Platform.OS !== 'android' || !SmsAndroid) {
-    return [];
-  }
-  const granted = await PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.READ_SMS,
-    {
-      title: 'SMS Permission',
-      message: 'This app needs access to your SMS messages to detect fraud.',
-      buttonNeutral: 'Ask Me Later',
-      buttonNegative: 'Cancel',
-      buttonPositive: 'OK',
-    },
-  );
-  if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-    throw new Error('SMS permission denied');
-  }
-  return new Promise((resolve, reject) => {
-    SmsAndroid.list(
-      JSON.stringify({ box: 'inbox' }),
-      fail => reject(fail),
-      (count, smsList) => {
-        const messages = JSON.parse(smsList).map((msg, idx) => ({
-          id: String(msg._id || idx),
-          text: msg.body,
-          status: 'safe',
-          timestamp: new Date(msg.date).toLocaleString(),
-          amount: '',
-          type: 'received',
-          sender: msg.address,
-          analysis: 'Not analyzed',
-        }));
-        resolve(messages);
-      }
-    );
-  });
-};
+const { width } = Dimensions.get('window');
 
 export default function DashboardScreen({ navigation }) {
-  const [activeTab, setActiveTab] = useState('overview');
-  const [isScanning, setIsScanning] = useState(false);
+  const { user } = useAuth();
+  const [refreshing, setRefreshing] = useState(false);
   const [fraudScore, setFraudScore] = useState(15);
-  const [smsAlerts, setSmsAlerts] = useState([]);
-  const [transactions, setTransactions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [lastScan, setLastScan] = useState(null);
-  const [smsSummary, setSmsSummary] = useState(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [apiSummary, setApiSummary] = useState(null);
+  const [apiLoading, setApiLoading] = useState(false);
+  const [apiError, setApiError] = useState(null);
+  const [userFinancialData, setUserFinancialData] = useState(null);
+  const [recentTransactions, setRecentTransactions] = useState([]);
+  const [isOffline, setIsOffline] = useState(false);
+  const [offlineError, setOfflineError] = useState(null);
 
-  // Mock data - in a real app, this would come from your ML API
-  const mockData = {
-    weeklySummary: {
+  // Keys for AsyncStorage
+  const CACHE_KEYS = {
+    FINANCIAL_DATA: `financial_data_${user?.uid}`,
+    TRANSACTIONS: `transactions_${user?.uid}`,
+    LAST_SYNC: `last_sync_${user?.uid}`,
+  };
+
+  // Cache management functions
+  const saveToCache = async (key, data) => {
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(data));
+    } catch (error) {
+      console.error('Error saving to cache:', error);
+    }
+  };
+
+  const loadFromCache = async (key) => {
+    try {
+      const cachedData = await AsyncStorage.getItem(key);
+      return cachedData ? JSON.parse(cachedData) : null;
+    } catch (error) {
+      console.error('Error loading from cache:', error);
+      return null;
+    }
+  };
+
+  const isFirebaseOfflineError = (error) => {
+    return error?.code === 'unavailable' || 
+           error?.message?.includes('offline') ||
+           error?.message?.includes('Failed to get document because the client is offline');
+  };
+
+  // Firebase functions
+  const saveTransactionToFirebase = async (transaction) => {
+    if (!user) return;
+    
+    try {
+      const transactionRef = doc(collection(db, 'users', user.uid, 'transactions'));
+      await setDoc(transactionRef, {
+        ...transaction,
+        userId: user.uid,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+    } catch (error) {
+      console.error('Error saving transaction:', error);
+      
+      if (isFirebaseOfflineError(error)) {
+        // Queue transaction for later sync when online
+        const queuedTransactions = await loadFromCache('queued_transactions') || [];
+        queuedTransactions.push({
+          ...transaction,
+          userId: user.uid,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          queuedAt: new Date().toISOString()
+        });
+        await saveToCache('queued_transactions', queuedTransactions);
+        
+        Alert.alert(
+          'Offline Mode',
+          'Transaction saved locally. It will sync when you are back online.',
+          [{ text: 'OK' }]
+        );
+      }
+    }
+  };
+
+  const updateUserFinancialSummary = async (summary) => {
+    if (!user) return;
+    
+    try {
+      const userDocRef = doc(db, 'users', user.uid);
+      await updateDoc(userDocRef, {
+        financialSummary: summary,
+        lastUpdated: new Date()
+      });
+      
+      // Update cached data as well
+      await saveToCache(CACHE_KEYS.FINANCIAL_DATA, summary);
+    } catch (error) {
+      console.error('Error updating financial summary:', error);
+      
+      if (isFirebaseOfflineError(error)) {
+        // Save to cache for offline access
+        await saveToCache(CACHE_KEYS.FINANCIAL_DATA, summary);
+        setOfflineError('Changes saved locally. Will sync when online.');
+      }
+    }
+  };
+
+  const loadUserDataFromFirebase = async () => {
+    if (!user) return;
+    
+    try {
+      setOfflineError(null);
+      setIsOffline(false);
+      
+      // Try to load user financial summary
+      const userDocRef = doc(db, 'users', user.uid);
+      const userDoc = await getDoc(userDocRef);
+      
+      if (userDoc.exists()) {
+        const financialData = userDoc.data().financialSummary;
+        setUserFinancialData(financialData);
+        
+        // Cache the data for offline use
+        if (financialData) {
+          await saveToCache(CACHE_KEYS.FINANCIAL_DATA, financialData);
+        }
+      }
+
+      // Try to load recent transactions
+      const transactionsRef = collection(db, 'users', user.uid, 'transactions');
+      const q = query(transactionsRef, orderBy('createdAt', 'desc'), limit(10));
+      
+      const unsubscribe = onSnapshot(q, 
+        (snapshot) => {
+          const transactions = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }));
+          setRecentTransactions(transactions);
+          
+          // Cache transactions for offline use
+          saveToCache(CACHE_KEYS.TRANSACTIONS, transactions);
+          saveToCache(CACHE_KEYS.LAST_SYNC, new Date().toISOString());
+        },
+        (error) => {
+          console.error('Error in transactions listener:', error);
+          if (isFirebaseOfflineError(error)) {
+            loadCachedData();
+          }
+        }
+      );
+
+      return unsubscribe;
+    } catch (error) {
+      console.error('Error loading user data:', error);
+      
+      if (isFirebaseOfflineError(error)) {
+        setIsOffline(true);
+        setOfflineError('You are currently offline. Showing cached data.');
+        await loadCachedData();
+      } else {
+        setOfflineError('Failed to load user data. Please try again.');
+      }
+    }
+  };
+
+  const loadCachedData = async () => {
+    try {
+      // Load cached financial data
+      const cachedFinancialData = await loadFromCache(CACHE_KEYS.FINANCIAL_DATA);
+      if (cachedFinancialData) {
+        setUserFinancialData(cachedFinancialData);
+      }
+
+      // Load cached transactions
+      const cachedTransactions = await loadFromCache(CACHE_KEYS.TRANSACTIONS);
+      if (cachedTransactions) {
+        setRecentTransactions(cachedTransactions);
+      }
+
+      // Check when data was last synced
+      const lastSync = await loadFromCache(CACHE_KEYS.LAST_SYNC);
+      if (lastSync) {
+        const lastSyncDate = new Date(lastSync);
+        const now = new Date();
+        const hoursSinceSync = (now - lastSyncDate) / (1000 * 60 * 60);
+        
+        if (hoursSinceSync > 24) {
+          setOfflineError('Data is more than 24 hours old. Connect to internet to sync.');
+        }
+      }
+    } catch (error) {
+      console.error('Error loading cached data:', error);
+    }
+  };
+
+  // Function to sync queued data when back online
+  const syncQueuedData = async () => {
+    try {
+      const queuedTransactions = await loadFromCache('queued_transactions');
+      if (queuedTransactions && queuedTransactions.length > 0) {
+        console.log('Syncing queued transactions:', queuedTransactions.length);
+        
+        for (const transaction of queuedTransactions) {
+          try {
+            const transactionRef = doc(collection(db, 'users', user.uid, 'transactions'));
+            await setDoc(transactionRef, transaction);
+          } catch (error) {
+            console.error('Error syncing transaction:', error);
+          }
+        }
+        
+        // Clear queued transactions after successful sync
+        await AsyncStorage.removeItem('queued_transactions');
+        setOfflineError(null);
+        
+        Alert.alert(
+          'Sync Complete',
+          `Successfully synced ${queuedTransactions.length} offline transactions.`,
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error('Error syncing queued data:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      // First load cached data immediately for better UX
+      loadCachedData();
+      
+      // Then try to load fresh data from Firebase
+      loadUserDataFromFirebase().then(() => {
+        // If successful, try to sync any queued offline data
+        syncQueuedData();
+      });
+    }
+  }, [user]);
+
+  // Function to get current data (Firebase, API or mock)
+  const getCurrentData = () => {
+    // Priority: Firebase user data > API data > Mock data
+    const financialData = userFinancialData || (apiSummary ? {
+      sent: `RWF ${apiSummary.total_sent?.toLocaleString() || '0'}`,
+      received: `RWF ${apiSummary.total_received?.toLocaleString() || '0'}`,
+      net: `${(apiSummary.total_received || 0) > (apiSummary.total_sent || 0) ? '+' : ''}RWF ${((apiSummary.total_received || 0) - (apiSummary.total_sent || 0)).toLocaleString()}`,
+      flagged: apiSummary.suspicious_transactions || 0
+    } : {
       sent: 'RWF 250,000',
       received: 'RWF 450,000',
       net: '+RWF 200,000',
       flagged: 3
-    },
-    spendingPatterns: [
-      { category: 'Shopping', amount: 'RWF 120,000', percentage: 48, alert: true },
-      { category: 'Utilities', amount: 'RWF 50,000', percentage: 20 },
-      { category: 'Entertainment', amount: 'RWF 30,000', percentage: 12 },
-      { category: 'Transport', amount: 'RWF 25,000', percentage: 10 },
-      { category: 'Other', amount: 'RWF 25,000', percentage: 10 },
+    });
+
+    return {
+      weeklySummary: financialData,
+      recentTransactions: recentTransactions.length > 0 ? recentTransactions.map(transaction => ({
+        id: transaction.id,
+        name: transaction.name || transaction.sender || 'Unknown',
+        amount: transaction.amount || `RWF ${transaction.value || 0}`,
+        date: transaction.date || new Date(transaction.createdAt?.toDate()).toLocaleDateString() || 'Recent',
+        type: transaction.type || 'sent',
+        flagged: transaction.flagged || false,
+        icon: transaction.icon || 'phone-outline'
+      })) : [
+      {
+        id: '1',
+        name: 'MTN Mobile Money',
+        amount: 'RWF 50,000',
+        date: 'Today',
+        type: 'sent',
+        flagged: false,
+        icon: 'phone-outline'
+      },
+      {
+        id: '2',
+        name: 'Online Payment',
+        amount: 'RWF 120,000',
+        date: 'Today',
+        type: 'sent',
+        flagged: true,
+        icon: 'card-outline'
+      },
+      {
+        id: '3',
+        name: 'Salary Deposit',
+        amount: 'RWF 450,000',
+        date: 'Today',
+        type: 'received',
+        flagged: false,
+        icon: 'business-outline'
+      },
     ],
-    smsAlerts: [
-      { 
-        id: '1', 
-        content: 'URGENT: Your account will be suspended. Click link to verify: fake.link', 
-        timestamp: '2 mins ago', 
-        risk: 'High', 
+    alerts: [
+      {
+        id: '1',
+        content: 'Suspicious SMS detected: Account verification request',
+        timestamp: '2 mins ago',
+        risk: 'High',
         type: 'phishing'
       },
-      { 
-        id: '2', 
-        content: 'Transaction of RWF 350,000 to John Doe. Reply STOP to cancel', 
-        timestamp: '1 hour ago', 
-        risk: 'Medium', 
-        type: 'fake_transaction'
+      {
+        id: '2',
+        content: 'Unusual transaction pattern detected',
+        timestamp: '1 hour ago',
+        risk: 'Medium',
+        type: 'transaction'
       },
-      { 
-        id: '3', 
-        content: 'You won RWF 5,000,000! Claim your prize: scam.link', 
-        timestamp: '3 hours ago', 
-        risk: 'High', 
-        type: 'scam'
+      {
+        id: '3',
+        content: 'New login attempt from unrecognized device',
+        timestamp: '3 hours ago',
+        risk: 'High',
+        type: 'security'
       },
-    ],
-    transactions: [
-      { 
-        id: '1', 
-        name: 'MTN Mobile Money', 
-        amount: 'RWF 50,000', 
-        date: 'Today', 
-        type: 'sent', 
-        flagged: false 
-      },
-      { 
-        id: '2', 
-        name: 'Online Payment', 
-        amount: 'RWF 120,000', 
-        date: 'Today', 
-        type: 'sent', 
-        flagged: true 
-      },
-      { 
-        id: '3', 
-        name: 'Salary Deposit', 
-        amount: 'RWF 450,000', 
-        date: 'Today', 
-        type: 'received', 
-        flagged: false 
-      },
-    ],
-    financialAdvice: [
-      "Your shopping expenses are 48% of your weekly spending - consider setting a budget",
-      "Detected 3 suspicious SMS messages this week - review in Alerts section",
-      "You've saved 25% less this week compared to average - try to reduce discretionary spending",
-      "Consistently saving 10% of income can build emergency fund in 6 months"
     ]
-  };
-
-  // Simulate API calls to ML backend
-  useEffect(() => {
-    const fetchData = async () => {
-      // Simulate network request
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      setSmsAlerts(mockData.smsAlerts);
-      setTransactions(mockData.transactions);
-      setLoading(false);
     };
-
-    fetchData();
-  }, []);
-
-  const runFraudScan = async () => {
-    setIsScanning(true);
-    try {
-      const smsMessages = await scanSmsMessages();
-      const analyzed = await analyzeMessages(smsMessages);
-      // Calculate fraud score and alerts
-      const fraudCount = analyzed.filter(m => m.status === 'fraud').length;
-      setFraudScore(fraudCount * 10); // Example: 10 points per fraud
-      setSmsAlerts(analyzed.filter(m => m.status === 'fraud' || m.status === 'suspicious'));
-      setLastScan(new Date());
-    } catch (e) {
-      // fallback to mock`
-      setFraudScore(15);
-      setSmsAlerts(mockData.smsAlerts);
-    }
-    setIsScanning(false);
   };
 
-  const fetchSmsSummary = async () => {
-    setSummaryLoading(true);
-    setSummaryError(null);
+  // Calculate notification count from alerts
+  const currentData = getCurrentData();
+  const notificationCount = currentData.alerts.length;
+
+  const fetchRealSummary = async () => {
+    setApiLoading(true);
+    setApiError(null);
     try {
-      // Get SMS messages from device (Android only)
-      const smsMessages = await scanSmsMessages();
-      // Extract just the text bodies for the API
-      const smsBodies = smsMessages.map(m => m.text).filter(Boolean);
-      if (smsBodies.length === 0) {
-        setSummaryError('No SMS messages found on device.');
-        setSummaryLoading(false);
-        return;
+      // In a real app, this would get messages data from shared state or navigate to Messages
+      // For now, we'll use mock transaction messages to demonstrate API integration
+      const mockTransactionMessages = [
+        'Received RWF 50,000 from John Doe. Your balance is RWF 125,000.',
+        'Sent RWF 25,000 to Jane Smith. Your balance is RWF 100,000.',
+        'Withdrawn RWF 30,000 from ATM. Your balance is RWF 70,000.',
+        'Bought airtime worth RWF 5,000. Your balance is RWF 65,000.',
+        'Received RWF 120,000 salary deposit. Your balance is RWF 185,000.'
+      ];
+      
+      const summary = await getSmsSummary(mockTransactionMessages);
+      setApiSummary(summary);
+      
+      // Show message to user if API was unavailable
+      if (summary.message) {
+        setApiError(summary.message);
       }
-      // Call the backend API with the SMS bodies
-      const summary = await getSmsSummary(smsBodies);
-      setSmsSummary(summary);
-    } catch (e) {
-      setSummaryError('Failed to fetch SMS summary');
+      
+      // Update fraud score based on API response
+      if (summary.suspicious_transactions > 0) {
+        setFraudScore(Math.min(50 + (summary.suspicious_transactions * 10), 95));
+      } else {
+        setFraudScore(Math.max(5, 15 - (summary.transactions_count || 0)));
+      }
+      
+      console.log('API Summary:', summary);
+    } catch (error) {
+      // This shouldn't happen now since API returns mock data on error
+      setApiError('Unable to fetch data');
+      console.error('Error fetching SMS summary:', error);
+    } finally {
+      setApiLoading(false);
     }
-    setSummaryLoading(false);
   };
+
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    
+    try {
+      // Try to refresh Firebase data first
+      if (user) {
+        await loadUserDataFromFirebase();
+      }
+      
+      // Then fetch real API summary
+      await fetchRealSummary();
+      
+    } catch (error) {
+      console.error('Error during refresh:', error);
+      if (isFirebaseOfflineError(error)) {
+        Alert.alert(
+          'Offline Mode',
+          'You are currently offline. Showing cached data.',
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert(
+          'Refresh Failed',
+          'Unable to refresh data. Please check your connection and try again.',
+          [{ text: 'OK' }]
+        );
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [user]);
 
   const getRiskLevel = () => {
     if (fraudScore < 10) return { text: "Low Risk", color: colors.success };
@@ -198,429 +433,234 @@ export default function DashboardScreen({ navigation }) {
 
   const getRiskIcon = (risk) => {
     switch(risk.toLowerCase()) {
-      case 'high': return <Ionicons name="warning" size={20} color={colors.danger} />;
-      case 'medium': return <Ionicons name="alert-circle" size={20} color={colors.warning} />;
-      default: return <Ionicons name="information-circle" size={20} color={colors.textSecondary} />;
+      case 'high': return { name: 'warning', color: colors.danger };
+      case 'medium': return { name: 'error-outline', color: colors.warning };
+      case 'low': return { name: 'check-circle', color: colors.success };
+      default: return { name: 'help-outline', color: colors.textSecondary };
     }
   };
 
-  const renderAdvice = () => {
-    return mockData.financialAdvice.map((advice, index) => (
-      <View key={index} style={styles.adviceItem}>
-        <Ionicons name="bulb-outline" size={18} color={colors.primary} />
-        <Text style={styles.adviceText}>{advice}</Text>
-      </View>
-    ));
-  };
-
-  const renderSpendingPatterns = () => {
-    // If smsSummary is available, use its monthly_summary for spending
-    if (smsSummary && smsSummary.monthly_summary) {
-      // Convert monthly_summary to array and sort by date
-      const months = Object.keys(smsSummary.monthly_summary);
-      // Optionally, sort months chronologically if needed
-      return months.map((month, index) => (
-        <View key={month} style={styles.spendingRow}>
-          <View style={styles.spendingCategory}>
-            <Text style={styles.spendingText}>{month}</Text>
-          </View>
-          <View style={styles.spendingBarContainer}>
-            <View 
-              style={[
-                styles.spendingBar, 
-                { 
-                  width: `${Math.min(100, (smsSummary.monthly_summary[month] / Math.max(...Object.values(smsSummary.monthly_summary))) * 100)}%`,
-                  backgroundColor: colors.primary
-                }
-              ]}
-            />
-          </View>
-          <Text style={styles.spendingAmount}>{`RWF ${smsSummary.monthly_summary[month].toLocaleString()}`}</Text>
-        </View>
-      ));
-    }
-    // fallback to mock
-    return mockData.spendingPatterns.map((item, index) => (
-      <View key={index} style={styles.spendingRow}>
-        <View className={styles.spendingCategory}>
-          <Text style={styles.spendingText}>{item.category}</Text>
-          {item.alert && <Ionicons name="warning" size={16} color={colors.danger} />}
-        </View>
-        <View style={styles.spendingBarContainer}>
-          <View 
-            style={[
-              styles.spendingBar, 
-              { 
-                width: `${item.percentage}%`,
-                backgroundColor: item.alert ? colors.danger : colors.primary
-              }
-            ]}
-          />
-        </View>
-        <Text style={styles.spendingAmount}>{item.amount}</Text>
-      </View>
-    ));
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>Analyzing your transactions...</Text>
-      </View>
-    );
-  }
+  const risk = getRiskLevel();
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Profile Summary */}
-      <View style={styles.profileContainer}>
-        <Image source={require('../../assets/icon.png')} style={styles.profileAvatar} />
-        <View style={styles.profileInfo}>
-          <Text style={styles.profileName}>Hello, Alex!</Text>
-          <Text style={styles.profileStats}>Net: {mockData.weeklySummary.net} | Risk: {getRiskLevel().text}</Text>
-        </View>
-      </View>
-
-      {/* Fraud Detection Card */}
-      <Card style={styles.fraudCard}>
-        <View style={styles.fraudHeader}>
-          <MaterialCommunityIcons name="shield-alert" size={28} color={colors.danger} />
-          <Text style={styles.fraudTitle}>SMS Fraud Detection</Text>
-        </View>
-        
-        <View style={styles.riskIndicator}>
-          <Text style={styles.riskLabel}>Current Risk Level:</Text>
-          <View style={[styles.riskBadge, { backgroundColor: getRiskLevel().color + '20' }]}>
-            <Text style={[styles.riskText, { color: getRiskLevel().color }]}>
-              {getRiskLevel().text}
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerContent}>
+          <View>
+            <Text style={styles.greeting}>Hello,</Text>
+            <Text style={styles.userName}>
+              {user?.displayName || user?.email?.split('@')[0] || 'User'}
             </Text>
           </View>
-        </View>
-        
-        {lastScan && (
-          <Text style={styles.lastScanText}>Last scanned: {lastScan.toLocaleString()}</Text>
-        )}
-        
-        <View style={styles.statsRow}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{mockData.weeklySummary.flagged}</Text>
-            <Text style={styles.statLabel}>SMS Alerts</Text>
-          </View>
-          
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{mockData.weeklySummary.sent}</Text>
-            <Text style={styles.statLabel}>Money Sent</Text>
-          </View>
-          
-          <View style={styles.statItem}>
-            <Text style={[styles.statValue, { color: colors.success }]}>
-              {mockData.weeklySummary.received}
-            </Text>
-            <Text style={styles.statLabel}>Money Received</Text>
-          </View>
-        </View>
-        
-        <TouchableOpacity 
-          style={styles.scanButton}
-          onPress={runFraudScan}
-          disabled={isScanning}
-        >
-          {isScanning ? (
-            <ActivityIndicator color={colors.white} />
-          ) : (
-            <>
-              <AntDesign name="scan1" size={20} color={colors.white} />
-              <Text style={styles.scanButtonText}>Scan Messages for Fraud</Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </Card>
-
-      {/* Navigation Tabs */}
-      <View style={styles.tabsContainer}>
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'overview' && styles.activeTab]}
-          onPress={() => setActiveTab('overview')}
-        >
-          <Text style={[styles.tabText, activeTab === 'overview' && styles.activeTabText]}>
-            Overview
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'spending' && styles.activeTab]}
-          onPress={() => setActiveTab('spending')}
-        >
-          <Text style={[styles.tabText, activeTab === 'spending' && styles.activeTabText]}>
-            Spending
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'alerts' && styles.activeTab]}
-          onPress={() => setActiveTab('alerts')}
-        >
-          <View style={styles.alertBadge}>
-            <Text style={styles.alertBadgeText}>{mockData.smsAlerts.length}</Text>
-          </View>
-          <Text style={[styles.tabText, activeTab === 'alerts' && styles.activeTabText]}>
-            Alerts
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Overview Tab Content */}
-      {activeTab === 'overview' && (
-        <>
-          {/* Weekly Summary */}
-          <Card style={styles.summaryCard}>
-            <Text style={styles.sectionTitle}>Weekly Summary</Text>
-            <View style={styles.summaryRow}>
-              <View style={styles.summaryItem}>
-                <Text style={styles.summaryLabel}>Money Sent</Text>
-                <Text style={styles.summaryValue}>{mockData.weeklySummary.sent}</Text>
+          <View style={styles.headerRight}>
+            {isOffline && (
+              <View style={styles.offlineIndicator}>
+                <MaterialIcons name="cloud-off" size={16} color={colors.warning} />
+                <Text style={styles.offlineText}>Offline</Text>
               </View>
-              <View style={styles.summaryItem}>
-                <Text style={styles.summaryLabel}>Money Received</Text>
-                <Text style={[styles.summaryValue, { color: colors.success }]}>
-                  {mockData.weeklySummary.received}
-                </Text>
-              </View>
-              <View style={styles.summaryItem}>
-                <Text style={styles.summaryLabel}>Net Change</Text>
-                <Text style={[styles.summaryValue, { color: colors.success }]}>
-                  {mockData.weeklySummary.net}
-                </Text>
-              </View>
-            </View>
-          </Card>
-
-          {/* Financial Advice */}
-          <Card style={styles.adviceCard}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="bulb" size={24} color={colors.primary} />
-              <Text style={styles.cardTitle}>Financial Advice</Text>
-            </View>
-            <View style={styles.adviceList}>
-              {renderAdvice()}
-            </View>
-            {/* Progress indicator example */}
-            <View style={styles.progressContainer}>
-              <Text style={styles.progressLabel}>Savings Progress</Text>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBar, { width: '60%', backgroundColor: colors.success }]} />
-              </View>
-              <Text style={styles.progressValue}>60% of goal</Text>
-            </View>
-          </Card>
-
-          {/* Recent Transactions */}
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Recent Transactions</Text>
-            <TouchableOpacity>
-              <Text style={styles.seeAll}>See all</Text>
-            </TouchableOpacity>
-          </View>
-          
-          {transactions.slice(0, 3).map(transaction => (
-            <Card key={transaction.id} style={[
-              styles.transactionCard,
-              transaction.flagged && styles.flaggedCard
-            ]}>
-              <View style={styles.transactionRow}>
-                <View style={[
-                  styles.transactionIcon,
-                  transaction.type === 'received' ? 
-                    { backgroundColor: colors.success + '20' } : 
-                    { backgroundColor: colors.primary + '20' }
-                ]}>
-                  <MaterialCommunityIcons 
-                    name={transaction.type === 'received' ? "arrow-bottom-left" : "arrow-top-right"} 
-                    size={20} 
-                    color={transaction.type === 'received' ? colors.success : colors.primary} 
-                  />
-                </View>
-                
-                <View style={styles.transactionInfo}>
-                  <Text style={styles.transactionName}>{transaction.name}</Text>
-                  <Text style={styles.transactionDate}>{transaction.date}</Text>
-                </View>
-                
-                <Text style={[
-                  styles.transactionAmount, 
-                  transaction.type === 'received' ? { color: colors.success } : {}
-                ]}>
-                  {transaction.amount}
-                </Text>
-                
-                {transaction.flagged && (
-                  <View style={styles.flagBadge}>
-                    <Ionicons name="flag" size={14} color={colors.danger} />
-                  </View>
-                )}
-              </View>
-            </Card>
-          ))}
-        </>
-      )}
-
-      {/* Spending Tab Content */}
-      {activeTab === 'spending' && (
-        <>
-          <Card style={styles.spendingCard}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="analytics" size={24} color={colors.primary} />
-              <Text style={styles.cardTitle}>Spending Patterns</Text>
-            </View>
-            
-            <View style={styles.spendingContainer}>
-              {renderSpendingPatterns()}
-            </View>
-            
-            <Text style={styles.spendingNote}>
-              AI Analysis: Your shopping expenses are significantly higher than average this week
-            </Text>
-            {/* Simple bar chart visualization */}
-            <View style={styles.barChartContainer}>
-              {mockData.spendingPatterns.map((item, idx) => (
-                <View key={idx} style={styles.barChartRow}>
-                  <Text style={styles.barChartLabel}>{item.category}</Text>
-                  <View style={styles.barChartBarBg}>
-                    <View style={[styles.barChartBar, { width: `${item.percentage}%`, backgroundColor: item.alert ? colors.danger : colors.primary }]} />
-                  </View>
-                  <Text style={styles.barChartValue}>{item.amount}</Text>
-                </View>
-              ))}
-            </View>
-          </Card>
-
-          <Card style={styles.budgetCard}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="wallet" size={24} color={colors.primary} />
-              <Text style={styles.cardTitle}>Budget Recommendations</Text>
-            </View>
-            
-            <View style={styles.budgetRow}>
-              <Text style={styles.budgetCategory}>Shopping</Text>
-              <Text style={styles.budgetAmount}>RWF 75,000</Text>
-              <Text style={[styles.budgetStatus, { color: colors.danger }]}>Over budget</Text>
-            </View>
-            
-            <View style={styles.budgetRow}>
-              <Text style={styles.budgetCategory}>Utilities</Text>
-              <Text style={styles.budgetAmount}>RWF 45,000</Text>
-              <Text style={[styles.budgetStatus, { color: colors.success }]}>On track</Text>
-            </View>
-            
-            <View style={styles.budgetRow}>
-              <Text style={styles.budgetCategory}>Entertainment</Text>
-              <Text style={styles.budgetAmount}>RWF 30,000</Text>
-              <Text style={[styles.budgetStatus, { color: colors.warning }]}>Approaching limit</Text>
-            </View>
-            
-            <TouchableOpacity style={styles.budgetButton}>
-              <Text style={styles.budgetButtonText}>Create Custom Budget</Text>
-            </TouchableOpacity>
-          </Card>
-        </>
-      )}
-
-      {/* Alerts Tab Content */}
-      {activeTab === 'alerts' && (
-        <>
-          <Card style={styles.alertsCard}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="warning" size={24} color={colors.danger} />
-              <Text style={styles.cardTitle}>SMS Fraud Alerts</Text>
-              <Text style={styles.alertCount}>{smsAlerts.length} detected</Text>
-            </View>
-            
-            <View style={styles.alertsContainer}>
-              {smsAlerts.map(alert => (
-                <View key={alert.id} style={styles.alertItem}>
-                  <View style={styles.alertHeader}>
-                    {getRiskIcon(alert.risk)}
-                    <Text style={[
-                      styles.alertRisk, 
-                      { color: alert.risk === 'High' ? colors.danger : colors.warning }
-                    ]}>
-                      {alert.risk} Risk
-                    </Text>
-                    <Text style={styles.alertTimestamp}>{alert.timestamp}</Text>
-                  </View>
-                  <Text style={styles.alertContent}>{alert.content}</Text>
-                  <View style={styles.alertActions}>
-                    <TouchableOpacity style={styles.alertButton}>
-                      <Text style={styles.alertButtonText}>Mark as Safe</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[styles.alertButton, styles.reportButton]}>
-                      <Text style={styles.alertButtonText}>Report Fraud</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ))}
-            </View>
-          </Card>
-          
-          <Card style={styles.protectionCard}>
-            <View style={styles.cardHeader}>
-              <MaterialCommunityIcons name="shield-check" size={24} color={colors.primary} />
-              <Text style={styles.cardTitle}>Protection Status</Text>
-            </View>
-            
-            <View style={styles.protectionStatus}>
-              <Ionicons name="checkmark-circle" size={32} color={colors.success} />
-              <Text style={styles.protectionText}>Real-time SMS scanning active</Text>
-            </View>
-            
-            <View style={styles.protectionStats}>
-              <View style={styles.protectionStat}>
-                <Text style={styles.protectionNumber}>98%</Text>
-                <Text style={styles.protectionLabel}>Fraud Accuracy</Text>
-              </View>
-              <View style={styles.protectionStat}>
-                <Text style={styles.protectionNumber}>24/7</Text>
-                <Text style={styles.protectionLabel}>Monitoring</Text>
-              </View>
-              <View style={styles.protectionStat}>
-                <Text style={styles.protectionNumber}>12</Text>
-                <Text style={styles.protectionLabel}>Protected</Text>
-              </View>
-            </View>
-          </Card>
-        </>
-      )}
-
-      {/* SMS Summary Section - New Feature */}
-      <View style={styles.smsSummaryContainer}>
-        <Text style={styles.smsSummaryTitle}>SMS Financial Summary</Text>
-        <TouchableOpacity style={styles.scanButton} onPress={fetchSmsSummary}>
-          <Text style={styles.scanButtonText}>Get SMS Financial Summary</Text>
-        </TouchableOpacity>
-        {summaryLoading && <Text>Loading summary...</Text>}
-        {summaryError && <Text style={{color: 'red'}}>{summaryError}</Text>}
-        {smsSummary && (
-          <View style={{backgroundColor: '#f5f5f5', margin: 12, padding: 12, borderRadius: 8}}>
-            <Text style={{fontWeight: 'bold', marginBottom: 8}}>Summary</Text>
-            <Text>Total Sent: <Text style={{fontWeight: 'bold'}}>{smsSummary.total_sent ? `RWF ${smsSummary.total_sent.toLocaleString()}` : '-'}</Text></Text>
-            <Text>Total Received: <Text style={{fontWeight: 'bold', color: colors.success}}>{smsSummary.total_received ? `RWF ${smsSummary.total_received.toLocaleString()}` : '-'}</Text></Text>
-            <Text>Total Withdrawn: <Text style={{fontWeight: 'bold'}}>{smsSummary.total_withdrawn ? `RWF ${smsSummary.total_withdrawn.toLocaleString()}` : '-'}</Text></Text>
-            <Text>Total Airtime: <Text style={{fontWeight: 'bold'}}>{smsSummary.total_airtime ? `RWF ${smsSummary.total_airtime.toLocaleString()}` : '-'}</Text></Text>
-            <Text>Latest Balance: <Text style={{fontWeight: 'bold'}}>{smsSummary.latest_balance ? `RWF ${smsSummary.latest_balance.toLocaleString()}` : '-'}</Text></Text>
-            <Text>Transactions: <Text style={{fontWeight: 'bold'}}>{smsSummary.transactions_count ?? '-'}</Text></Text>
-            <Text style={{marginTop: 8, fontWeight: 'bold'}}>Monthly Summary:</Text>
-            {smsSummary.monthly_summary && Object.keys(smsSummary.monthly_summary).length > 0 ? (
-              Object.entries(smsSummary.monthly_summary).map(([month, amount]) => (
-                <Text key={month} style={{marginLeft: 8}}>{month}: RWF {amount.toLocaleString()}</Text>
-              ))
-            ) : (
-              <Text style={{marginLeft: 8}}>-</Text>
             )}
-            {/* Raw JSON for debugging */}
-            <Text style={{marginTop: 12, fontSize: 12, color: '#888'}}>Raw: {JSON.stringify(smsSummary, null, 2)}</Text>
+            <TouchableOpacity style={styles.notificationButton}>
+              <Ionicons name="notifications-outline" size={20} color={colors.white} />
+              {notificationCount > 0 && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationBadgeText}>
+                    {notificationCount > 99 ? '99+' : notificationCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+        
+        {/* Offline Error Banner */}
+        {offlineError && (
+          <View style={styles.offlineBanner}>
+            <MaterialIcons name="info" size={16} color={colors.warning} />
+            <Text style={styles.offlineBannerText}>{offlineError}</Text>
           </View>
         )}
       </View>
-    </ScrollView>
+
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+      >
+        {/* Security Score Card */}
+        <Card style={styles.securityCard} variant="elevated">
+          <View style={styles.securityHeader}>
+            <View style={styles.securityTitleContainer}>
+              <MaterialIcons name="security" size={24} color={colors.primary} />
+              <Text style={styles.securityTitle}>Security Score</Text>
+            </View>
+            <View style={[styles.riskBadge, { backgroundColor: risk.color + '20' }]}>
+              <Text style={[styles.riskText, { color: risk.color }]}>
+                {risk.text}
+              </Text>
+            </View>
+          </View>
+          
+          <View style={styles.scoreContainer}>
+            <Text style={styles.scoreValue}>{100 - fraudScore}/100</Text>
+            <View style={styles.scoreBar}>
+              <View 
+                style={[
+                  styles.scoreProgress, 
+                  { width: `${100 - fraudScore}%`, backgroundColor: risk.color }
+                ]} 
+              />
+            </View>
+          </View>
+          
+          <Text style={styles.scoreDescription}>
+            Your account is {risk.text.toLowerCase()}. {fraudScore > 0 && `${fraudScore} potential threats detected.`}
+          </Text>
+        </Card>
+
+        {/* Financial Summary Card */}
+        <Card style={styles.summaryCard} variant="elevated">
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Financial Summary</Text>
+            {apiSummary && (
+              <TouchableOpacity onPress={fetchRealSummary}>
+                <Text style={styles.refreshText}>Refresh</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          
+          <View style={styles.summaryGrid}>
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryValue}>
+                {apiSummary ? `RWF ${apiSummary.total_sent?.toLocaleString() || '0'}` : 'RWF 250,000'}
+              </Text>
+              <Text style={styles.summaryLabel}>Sent</Text>
+            </View>
+            
+            <View style={styles.summaryItem}>
+              <Text style={[styles.summaryValue, { color: colors.success }]}>
+                {apiSummary ? `RWF ${apiSummary.total_received?.toLocaleString() || '0'}` : 'RWF 450,000'}
+              </Text>
+              <Text style={styles.summaryLabel}>Received</Text>
+            </View>
+            
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryValue}>
+                {apiSummary ? apiSummary.transactions_count || 0 : 15}
+              </Text>
+              <Text style={styles.summaryLabel}>Transactions</Text>
+            </View>
+            
+            <View style={styles.summaryItem}>
+              <Text style={[styles.summaryValue, { color: colors.primary }]}>
+                {apiSummary ? `RWF ${apiSummary.latest_balance?.toLocaleString() || '0'}` : 'RWF 185,000'}
+              </Text>
+              <Text style={styles.summaryLabel}>Balance</Text>
+            </View>
+          </View>
+          
+          {!apiSummary && (
+            <TouchableOpacity 
+              style={[styles.fetchButton, apiLoading && styles.fetchButtonDisabled]} 
+              onPress={fetchRealSummary}
+              disabled={apiLoading}
+            >
+              <MaterialIcons name="refresh" size={20} color={colors.white} />
+              <Text style={styles.fetchButtonText}>
+                {apiLoading ? 'Loading...' : 'Get Real Summary'}
+              </Text>
+            </TouchableOpacity>
+          )}
+          
+          {apiError && (
+            <View style={styles.errorContainer}>
+              <MaterialIcons name="info" size={16} color={colors.warning} />
+              <Text style={styles.errorText}>{apiError}</Text>
+            </View>
+          )}
+        </Card>
+
+        {/* Quick Actions */}
+        <View style={styles.quickActionsContainer}>
+          <Text style={styles.sectionTitle}>Quick Actions</Text>
+          <View style={styles.quickActions}>
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={() => navigation.navigate('Messages')}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: colors.primaryLight }]}>
+                <MaterialIcons name="message" size={20} color={colors.primary} />
+              </View>
+              <Text style={styles.quickActionText}>Messages</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={() => navigation.navigate('Advice')}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: colors.successLight }]}>
+                <MaterialIcons name="lightbulb" size={20} color={colors.success} />
+              </View>
+              <Text style={styles.quickActionText}>Advice</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.quickActionButton}>
+              <View style={[styles.quickActionIcon, { backgroundColor: colors.warningLight }]}>
+                <MaterialIcons name="analytics" size={20} color={colors.warning} />
+              </View>
+              <Text style={styles.quickActionText}>Scan</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={() => navigation.navigate('Profile')}
+            >
+              <View style={[styles.quickActionIcon, { backgroundColor: colors.infoLight }]}>
+                <MaterialIcons name="person" size={20} color={colors.info} />
+              </View>
+              <Text style={styles.quickActionText}>Profile</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Recent Alerts */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Recent Alerts</Text>
+            <TouchableOpacity onPress={() => navigation.navigate('Messages')}>
+              <Text style={styles.seeAllText}>See All</Text>
+            </TouchableOpacity>
+          </View>
+          
+          {currentData.alerts.slice(0, 2).map((alert) => {
+            const alertIcon = getRiskIcon(alert.risk);
+            return (
+              <Card key={alert.id} style={styles.alertCard}>
+                <View style={styles.alertContent}>
+                  <View style={[styles.alertIcon, { backgroundColor: alertIcon.color + '20' }]}>
+                    <MaterialIcons name={alertIcon.name} size={20} color={alertIcon.color} />
+                  </View>
+                  <View style={styles.alertInfo}>
+                    <Text style={styles.alertText} numberOfLines={2}>
+                      {alert.content}
+                    </Text>
+                    <Text style={styles.alertTime}>{alert.timestamp}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.alertArrow}>
+                    <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+              </Card>
+            );
+          })}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -628,590 +668,413 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
-    padding: 16,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-  },
-  loadingText: {
-    marginTop: 20,
-    fontSize: 16,
-    color: colors.textSecondary,
   },
   header: {
+    backgroundColor: colors.surface,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  headerContent: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 24,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  offlineIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.warningLight,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
+  },
+  offlineText: {
+    fontSize: 12,
+    color: colors.warning,
+    fontWeight: '500',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.warningLight,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginTop: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  offlineBannerText: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.warning,
+    fontWeight: '500',
   },
   greeting: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: colors.text,
-  },
-  subtitle: {
     fontSize: 16,
     color: colors.textSecondary,
   },
-  fraudCard: {
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-    backgroundColor: colors.backgroundLight,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  fraudHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 16,
-  },
-  fraudTitle: {
-    fontSize: 20,
+  userName: {
+    fontSize: 24,
     fontWeight: '700',
     color: colors.text,
+    marginTop: 4,
   },
-  riskIndicator: {
+  notificationButton: {
+    position: 'relative',
+    backgroundColor: colors.primary,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: colors.danger,
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.white,
+    paddingHorizontal: 2,
+  },
+  notificationBadgeText: {
+    color: colors.white,
+    fontSize: 10,
+    fontWeight: '700',
+    textAlign: 'center',
+    lineHeight: 12,
+  },
+  scrollView: {
+    flex: 1,
+    paddingHorizontal: 24,
+  },
+  scrollContent: {
+    paddingBottom: 60, // Reduced padding for bottom navigation
+  },
+  securityCard: {
+    marginTop: 20,
+    marginBottom: 16,
+  },
+  securityHeader: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
-    gap: 10,
   },
-  riskLabel: {
-    fontSize: 16,
-    color: colors.textSecondary,
+  securityTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  securityTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: colors.text,
+    marginLeft: 8,
   },
   riskBadge: {
-    paddingVertical: 4,
     paddingHorizontal: 12,
-    borderRadius: 20,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
   riskText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-  },
-  statItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 4,
-    color: colors.text,
-  },
-  statLabel: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: 'center',
-  },
-  scanButton: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-    paddingVertical: 14,
-    borderRadius: 12,
-    gap: 10,
-  },
-  scanButtonText: {
-    color: colors.white,
-    fontWeight: '600',
-    fontSize: 16,
-  },
-  tabsContainer: {
-    flexDirection: 'row',
-    backgroundColor: colors.backgroundLight,
-    borderRadius: 12,
-    padding: 6,
-    marginBottom: 24,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  activeTab: {
-    backgroundColor: colors.white,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  tabText: {
-    fontWeight: '600',
-    color: colors.textSecondary,
-  },
-  activeTabText: {
-    color: colors.primary,
-  },
-  alertBadge: {
-    position: 'absolute',
-    top: -5,
-    right: 10,
-    backgroundColor: colors.danger,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  alertBadgeText: {
-    color: colors.white,
     fontSize: 12,
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
-  summaryCard: {
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-    backgroundColor: colors.backgroundLight,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
+  scoreContainer: {
+    marginBottom: 12,
   },
-  sectionTitle: {
-    fontSize: 18,
+  scoreValue: {
+    fontSize: 32,
     fontWeight: '700',
     color: colors.text,
-    marginBottom: 16,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  summaryItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  summaryLabel: {
-    fontSize: 14,
-    color: colors.textSecondary,
     marginBottom: 8,
   },
-  summaryValue: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.text,
+  scoreBar: {
+    height: 8,
+    backgroundColor: colors.gray200,
+    borderRadius: 4,
+    overflow: 'hidden',
   },
-  adviceCard: {
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-    backgroundColor: colors.primaryLight + '15',
-    borderWidth: 1,
-    borderColor: colors.primaryLight,
+  scoreProgress: {
+    height: '100%',
+    borderRadius: 4,
   },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
+  scoreDescription: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    lineHeight: 20,
+  },
+  summaryCard: {
     marginBottom: 16,
   },
-  cardTitle: {
+  summaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  summaryItem: {
+    width: '48%',
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  summaryValue: {
     fontSize: 18,
     fontWeight: '700',
-    color: colors.primary,
-  },
-  adviceList: {
-    gap: 16,
-  },
-  adviceItem: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  adviceText: {
-    flex: 1,
-    fontSize: 16,
     color: colors.text,
-    lineHeight: 24,
+    marginBottom: 4,
+  },
+  summaryLabel: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  refreshText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  fetchButton: {
+    flexDirection: 'row',
+    backgroundColor: colors.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  fetchButtonDisabled: {
+    backgroundColor: colors.textSecondary,
+    opacity: 0.6,
+  },
+  fetchButtonText: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.warningLight,
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 12,
+    gap: 8,
+  },
+  errorText: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.warning,
+  },
+  quickActionsContainer: {
+    marginBottom: 24,
+  },
+  apiSummaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 16,
+  },
+  apiSummaryItem: {
+    width: '50%',
+    marginBottom: 12,
+  },
+  apiSummaryLabel: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginBottom: 4,
+  },
+  apiSummaryValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  refreshApiButton: {
+    backgroundColor: colors.success,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  refreshApiButtonText: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  connectApiButton: {
+    backgroundColor: colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  connectApiButtonLoading: {
+    backgroundColor: colors.primary + '80',
+  },
+  connectApiButtonText: {
+    color: colors.white,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  apiErrorText: {
+    color: colors.danger,
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 12,
+  },
+  quickActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  quickActionButton: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  quickActionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  quickActionText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: colors.text,
+  },
+  section: {
+    marginBottom: 24,
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
-  },
-  seeAll: {
-    color: colors.primary,
-    fontWeight: '600',
-  },
-  transactionCard: {
-    borderRadius: 16,
-    padding: 16,
     marginBottom: 12,
-    backgroundColor: colors.backgroundLight,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
   },
-  flaggedCard: {
-    borderColor: colors.dangerLight,
-    backgroundColor: colors.dangerLight + '20',
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: colors.text,
   },
-  transactionRow: {
+  seeAllText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '500',
+  },
+  alertCard: {
+    marginBottom: 8,
+    padding: 16,
+  },
+  alertContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    position: 'relative',
+  },
+  alertIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  alertInfo: {
+    flex: 1,
+  },
+  alertText: {
+    fontSize: 14,
+    color: colors.text,
+    marginBottom: 4,
+  },
+  alertTime: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  alertArrow: {
+    padding: 4,
+  },
+  summaryCard: {
+    padding: 20,
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  summaryItem: {
+    width: '50%',
+    marginBottom: 16,
+  },
+  summaryLabel: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 4,
+  },
+  summaryValue: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  transactionCard: {
+    marginBottom: 8,
+    padding: 16,
+  },
+  transactionContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  transactionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
   },
   transactionIcon: {
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 12,
+    backgroundColor: colors.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
+    marginRight: 12,
   },
   transactionInfo: {
     flex: 1,
   },
   transactionName: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '500',
     color: colors.text,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   transactionDate: {
-    fontSize: 13,
+    fontSize: 12,
     color: colors.textSecondary,
+  },
+  transactionRight: {
+    alignItems: 'flex-end',
   },
   transactionAmount: {
     fontSize: 16,
-    fontWeight: '800',
-  },
-  flagBadge: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    backgroundColor: colors.danger,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  spendingCard: {
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-    backgroundColor: colors.backgroundLight,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  spendingContainer: {
-    gap: 12,
-    marginBottom: 16,
-  },
-  spendingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  spendingCategory: {
-    width: 100,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  spendingText: {
-    fontSize: 14,
-    color: colors.text,
-  },
-  spendingBarContainer: {
-    flex: 1,
-    height: 8,
-    backgroundColor: colors.background,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  spendingBar: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  spendingAmount: {
-    width: 90,
-    fontSize: 14,
     fontWeight: '600',
-    textAlign: 'right',
-    color: colors.text,
-  },
-  spendingNote: {
-    fontSize: 14,
-    color: colors.danger,
-    fontStyle: 'italic',
-    marginTop: 8,
-  },
-  budgetCard: {
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-    backgroundColor: colors.backgroundLight,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  budgetRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  budgetCategory: {
-    fontSize: 16,
-    color: colors.text,
-    width: '35%',
-  },
-  budgetAmount: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-    width: '30%',
-  },
-  budgetStatus: {
-    fontSize: 14,
-    fontWeight: '600',
-    width: '35%',
-    textAlign: 'right',
-  },
-  budgetButton: {
-    marginTop: 16,
-    backgroundColor: colors.primary,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  budgetButtonText: {
-    color: colors.white,
-    fontWeight: '600',
-    fontSize: 16,
-  },
-  alertsCard: {
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-    backgroundColor: colors.backgroundLight,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  alertCount: {
-    marginLeft: 'auto',
-    backgroundColor: colors.danger + '20',
-    color: colors.danger,
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    fontWeight: '600',
-  },
-  alertsContainer: {
-    gap: 16,
-  },
-  alertItem: {
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  alertHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 12,
-  },
-  alertRisk: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  alertTimestamp: {
-    marginLeft: 'auto',
-    fontSize: 12,
-    color: colors.textSecondary,
-  },
-  alertContent: {
-    fontSize: 16,
-    color: colors.text,
-    marginBottom: 16,
-  },
-  alertActions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  alertButton: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    alignItems: 'center',
-  },
-  reportButton: {
-    backgroundColor: colors.danger + '20',
-    borderColor: colors.danger,
-  },
-  alertButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  protectionCard: {
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-    backgroundColor: colors.backgroundLight,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  protectionStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  protectionText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  protectionStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 16,
-  },
-  protectionStat: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  protectionNumber: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: colors.primary,
-    marginBottom: 4,
-  },
-  protectionLabel: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: 'center',
-  },
-  profileContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-    backgroundColor: colors.backgroundLight,
-    borderRadius: 16,
-    padding: 12,
-    gap: 16,
-  },
-  profileAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primary + '10',
-  },
-  profileInfo: {
-    flex: 1,
-  },
-  profileName: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  profileStats: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: 4,
-  },
-  lastScanText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginBottom: 8,
-    marginTop: -8,
-    textAlign: 'right',
-  },
-  barChartContainer: {
-    marginTop: 16,
-    gap: 8,
-  },
-  barChartRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  barChartLabel: {
-    width: 90,
-    fontSize: 14,
-    color: colors.textSecondary,
-  },
-  barChartBarBg: {
-    flex: 1,
-    height: 12,
-    backgroundColor: colors.card,
-    borderRadius: 6,
-    overflow: 'hidden',
-    marginHorizontal: 4,
-  },
-  barChartBar: {
-    height: 12,
-    borderRadius: 6,
-  },
-  barChartValue: {
-    width: 70,
-    fontSize: 14,
-    color: colors.text,
-    textAlign: 'right',
-  },
-  progressContainer: {
-    marginTop: 16,
-    alignItems: 'center',
-  },
-  progressLabel: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginBottom: 4,
-  },
-  progressBarBg: {
-    width: '100%',
-    height: 10,
-    backgroundColor: colors.card,
-    borderRadius: 5,
-    overflow: 'hidden',
-    marginBottom: 4,
-  },
-  progressBar: {
-    height: 10,
-    borderRadius: 5,
-  },
-  progressValue: {
-    fontSize: 12,
-    color: colors.success,
-  },
-  smsSummaryContainer: {
-    marginTop: 24,
-    padding: 16,
-    borderRadius: 12,
-    backgroundColor: colors.backgroundLight,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  smsSummaryTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 16,
+    marginBottom: 2,
   },
 });
