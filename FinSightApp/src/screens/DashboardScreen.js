@@ -14,7 +14,7 @@ import {
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import Card from '../components/Card';
 import colors from '../theme/colors';
-import { getSmsSummary, analyzeMessages } from '../utils/api';
+import { getSmsSummary, analyzeMessages, getFinancialSummary } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../config/firebase';
 import { 

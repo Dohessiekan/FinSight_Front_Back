@@ -63,3 +63,32 @@ local.properties
 
 # Remove unwanted src.zip if present
 src.zip
+
+# Python Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+ENV/
+finsight_py310/
+finsight_env/
+
+# ML Model Files (Large files - ignore to avoid git issues)
+*.pkl
+*.h5
+*.model
+*.joblib
+*.bin
+*.pt
+*.pth
+
+# Specifically ignore your model files
+tokenizer.pkl
+label_encoder.pkl
+max_len.pkl
+spam_classifier.h5
+
+# Python packages
+pip-wheel-metadata/
+*.egg-info/

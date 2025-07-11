@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Card from '../components/Card';
 import colors from '../theme/colors';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { analyzeMessages } from '../utils/api';
+import { analyzeMessages, analyzeMessagesComprehensive, detectSpamBatch } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../config/firebase';
 import { 
@@ -301,13 +301,58 @@ export default function MessagesScreen() {
         transactionKeywords.some(keyword => m.text && m.text.toLowerCase().includes(keyword))
       );
       
-      // Analyze messages with API for better fraud detection
+      // Analyze messages with comprehensive API (financial + spam detection)
       try {
-        const analyzedMessages = await analyzeMessages(transactionMessages);
+        console.log('🔍 Analyzing messages with unified API...');
         
-        // Save each analyzed message to Firebase
-        for (const message of analyzedMessages) {
-          await saveMessageToFirebase(message);
+        // Use comprehensive analysis API for both financial and spam detection
+        const messageTexts = transactionMessages.map(m => m.text);
+        const comprehensiveResult = await analyzeMessagesComprehensive(messageTexts, user?.uid);
+        
+        if (comprehensiveResult.success) {
+          console.log('✅ Comprehensive analysis successful');
+          
+          // Process results from comprehensive analysis
+          const analyzedMessages = transactionMessages.map((message, index) => {
+            const spamResult = comprehensiveResult.data.spam_analysis.results.find(r => r.message_index === index);
+            const financialData = comprehensiveResult.data.financial_summary;
+            
+            // Determine status based on spam detection
+            let status = 'safe';
+            if (spamResult?.prediction.is_spam) {
+              status = spamResult.prediction.confidence > 0.8 ? 'fraud' : 'suspicious';
+            }
+            
+            return {
+              ...message,
+              status,
+              analysis: spamResult 
+                ? `${spamResult.prediction.is_spam ? '🚨 SPAM detected' : '✅ Legitimate'} (${Math.round(spamResult.prediction.confidence * 100)}% confidence)`
+                : 'Analysis completed',
+              spamData: spamResult?.prediction,
+              financialData: financialData
+            };
+          });
+          
+          // Save analyzed messages to Firebase
+          for (const message of analyzedMessages) {
+            await saveMessageToFirebase(message);
+          }
+          
+          // Update dashboard with financial summary
+          console.log('💰 Financial Summary:', comprehensiveResult.data.financial_summary);
+          console.log('🛡️ Spam Analysis:', comprehensiveResult.data.spam_analysis);
+          
+        } else {
+          console.log('⚠️ Comprehensive analysis failed, falling back to individual analysis');
+          
+          // Fallback to individual message analysis
+          const analyzedMessages = await analyzeMessages(transactionMessages);
+          
+          // Save analyzed messages to Firebase
+          for (const message of analyzedMessages) {
+            await saveMessageToFirebase(message);
+          }
         }
         
         setScanComplete(true);
@@ -316,7 +361,11 @@ export default function MessagesScreen() {
         
         // Save unanalyzed messages to Firebase as fallback
         for (const message of transactionMessages) {
-          await saveMessageToFirebase(message);
+          await saveMessageToFirebase({
+            ...message,
+            status: 'unknown',
+            analysis: 'Analysis unavailable - manual review needed'
+          });
         }
         
         setScanComplete(true);
