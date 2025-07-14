@@ -22,16 +22,21 @@ public class SmsReceiver extends BroadcastReceiver {
                         SmsMessage sms = SmsMessage.createFromPdu((byte[]) pdu);
                         String messageBody = sms.getMessageBody();
                         String sender = sms.getDisplayOriginatingAddress();
-                        Log.d("SmsReceiver", "SMS from: " + sender + ", message: " + messageBody);
-                        // Show notification
-                        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, "sms_channel")
-                                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                                .setContentTitle("New SMS Received")
-                                .setContentText("Tap to scan for fraud.")
-                                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                                .setAutoCancel(true);
-                        NotificationManagerCompat notificationManager = NotificationManagerCompat.from(context);
-                        notificationManager.notify((int) System.currentTimeMillis(), builder.build());
+
+                        // Filter messages related to transactions using regular expressions
+                        if (messageBody.matches(".*\\b(transaction|payment|balance|withdrawal)\\b.*")) {
+                            Log.d("SmsReceiver", "Transaction SMS from: " + sender + ", message: " + messageBody);
+
+                            // Show notification for transaction-related SMS
+                            NotificationCompat.Builder builder = new NotificationCompat.Builder(context, "sms_channel")
+                                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                                    .setContentTitle("Transaction SMS Received")
+                                    .setContentText(messageBody)
+                                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                                    .setAutoCancel(true);
+                            NotificationManagerCompat notificationManager = NotificationManagerCompat.from(context);
+                            notificationManager.notify((int) System.currentTimeMillis(), builder.build());
+                        }
                     }
                 }
             }

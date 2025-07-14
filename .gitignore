@@ -82,13 +82,50 @@ finsight_env/
 *.bin
 *.pt
 *.pth
+*.keras
 
 # Specifically ignore your model files
 tokenizer.pkl
 label_encoder.pkl
 max_len.pkl
 spam_classifier.h5
+model_sentiment.keras
+
+# Android build files and large binaries
+*.so
+*.pyd
+*.apk
+*.aab
+android/app/build/
+android/build/
+android/.gradle/
+**/build/
+**/libs/
 
 # Python packages
 pip-wheel-metadata/
 *.egg-info/
+
+# React Native Metro cache
+.metro-health-check*
+
+# Large cache and build directories
+.gradle/
+gradle/
+build/
+*/build/
+android/app/build/
+android/build/
+ios/build/
+node_modules/
+
+# Package lock files (optional - comment out if you want to track them)
+# package-lock.json
+# yarn.lock
+
+# IDEs and editors
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws

@@ -23,8 +23,18 @@ app.add_middleware(
 try:
     import pickle
     import numpy as np
-    from tensorflow.keras.models import load_model
-    from tensorflow.keras.preprocessing.sequence import pad_sequences
+    import tensorflow as tf
+    from keras.models import load_model
+    from keras.preprocessing.sequence import pad_sequences
+    
+    # Set memory growth for GPU if available
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            print(f"GPU setup warning: {e}")
     
     with open('../tokenizer.pkl', 'rb') as f:
         tokenizer = pickle.load(f)
@@ -35,8 +45,18 @@ try:
     with open('../max_len.pkl', 'rb') as f:
         max_len = pickle.load(f)
 
-    model = load_model('../spam_classifier.h5')
-    print("✅ Spam detection model loaded successfully!")
+    try:
+        model = load_model('../model_sentiment.keras', compile=False)
+        print("✅ Spam detection model loaded successfully!")
+        print(f"📊 Model input shape: {model.input_shape}")
+        print(f"📊 Model output shape: {model.output_shape}")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not load spam detection model: {e}")
+        print("📱 SMS financial summary will still work without spam detection.")
+        tokenizer = None
+        label_encoder = None
+        max_len = None
+        model = None
 except Exception as e:
     print(f"⚠️ Warning: Could not load spam detection model: {e}")
     print("📱 SMS financial summary will still work without spam detection.")
@@ -46,64 +66,112 @@ except Exception as e:
     model = None
 
 # Request & Response schemas
-class TextIn(BaseModel):
-    text: str
+from typing import Union, Optional
+from pydantic import BaseModel, validator
+
+class FlexibleTextIn(BaseModel):
+    # Support both single text and multiple messages
+    text: Optional[str] = None
+    messages: Optional[List[str]] = None
+    
+    @validator('messages', pre=True, always=True)
+    def check_text_or_messages(cls, v, values):
+        text = values.get('text')
+        if not text and not v:
+            raise ValueError('Either text or messages must be provided')
+        if text and v:
+            raise ValueError('Provide either text or messages, not both')
+        return v
 
 class PredictionOut(BaseModel):
     label: str
     confidence: float
     probabilities: dict
 
-@app.post("/predict-spam", response_model=PredictionOut)
-def predict_spam(payload: TextIn):
-    # Check if model is loaded
-    if not all([tokenizer, label_encoder, max_len, model]):
-        return PredictionOut(
-            label="unknown",
-            confidence=0.0,
-            probabilities={"ham": 0.5, "spam": 0.5}
-        )
-    
-    try:
-        import numpy as np
-        
-        # 1. Text → sequence → padded
-        seq = tokenizer.texts_to_sequences([payload.text])
-        pad = pad_sequences(seq, maxlen=max_len, padding='post')
+class BatchPredictionOut(BaseModel):
+    results: List[PredictionOut]
 
-        # 2. Model inference
-        probs = model.predict(pad).flatten()
-
-        # 3. Build probability dict
-        if probs.shape[0] == 1:
-            # Binary sigmoid
-            prob_dict = {
-                label_encoder.classes_[0]: float(1 - probs[0]),
-                label_encoder.classes_[1]: float(probs[0])
-            }
-        else:
-            # (rare) multiclass softmax
-            prob_dict = {
-                label: float(p)
-                for label, p in zip(label_encoder.classes_, probs)
-            }
-
-        # 4. Pick top
-        idx = int(np.argmax(list(prob_dict.values())))
-        predicted_label = label_encoder.classes_[idx]
-        confidence = list(prob_dict.values())[idx]
-
-        return PredictionOut(
-            label=predicted_label,
-            confidence=confidence,
-            probabilities=prob_dict
-        )
-    except Exception as e:
+@app.post("/predict-spam")
+def predict_spam(payload: FlexibleTextIn):
+    # Determine if this is a single message or batch
+    if payload.text is not None:
+        # Single message
+        messages_to_process = [payload.text]
+        return_single = True
+    elif payload.messages is not None:
+        # Batch of messages
+        messages_to_process = payload.messages
+        return_single = False
+    else:
+        # No valid input
         return PredictionOut(
             label="error",
             confidence=0.0,
             probabilities={"error": 1.0}
         )
+    
+    results = []
+    
+    for message in messages_to_process:
+        # Check if model is loaded
+        if not all([tokenizer, label_encoder, max_len, model]):
+            results.append(PredictionOut(
+                label="unknown",
+                confidence=0.0,
+                probabilities={"ham": 0.5, "spam": 0.5}
+            ))
+            continue
+        
+        try:
+            import numpy as np
+            
+            # 1. Text → sequence → padded
+            seq = tokenizer.texts_to_sequences([message])
+            pad = pad_sequences(seq, maxlen=max_len, padding='post')
+
+            # 2. Model inference
+            probs = model.predict(pad).flatten()
+
+            # 3. Build probability dict
+            if probs.shape[0] == 1:
+                # Binary sigmoid
+                prob_dict = {
+                    label_encoder.classes_[0]: float(1 - probs[0]),
+                    label_encoder.classes_[1]: float(probs[0])
+                }
+            else:
+                # (rare) multiclass softmax
+                prob_dict = {
+                    label: float(p)
+                    for label, p in zip(label_encoder.classes_, probs)
+                }
+
+            # 4. Pick top
+            idx = int(np.argmax(list(prob_dict.values())))
+            predicted_label = label_encoder.classes_[idx]
+            confidence = list(prob_dict.values())[idx]
+
+            results.append(PredictionOut(
+                label=predicted_label,
+                confidence=confidence,
+                probabilities=prob_dict
+            ))
+        except Exception as e:
+            results.append(PredictionOut(
+                label="error",
+                confidence=0.0,
+                probabilities={"error": 1.0}
+            ))
+    
+    # Return single result or batch results based on input
+    if return_single:
+        return results[0] if results else PredictionOut(
+            label="error",
+            confidence=0.0,
+            probabilities={"error": 1.0}
+        )
+    else:
+        return BatchPredictionOut(results=results)
 
 
 

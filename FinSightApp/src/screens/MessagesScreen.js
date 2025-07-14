@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Card from '../components/Card';
 import colors from '../theme/colors';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { analyzeMessages, analyzeMessagesComprehensive, detectSpamBatch } from '../utils/api';
+import { analyzeMessages, analyzeMessagesComprehensive, detectSpamBatch, scanMessages } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../config/firebase';
 import { 
@@ -261,17 +261,18 @@ export default function MessagesScreen() {
   };
 
   useEffect(() => {
-    if (user) {
-      let unsubscribe;
-      
-      const setupMessagesListener = async () => {
-        unsubscribe = await loadMessagesFromFirebase();
-      };
-      
-      setupMessagesListener();
-      
-      return () => unsubscribe && unsubscribe();
-    }
+    // Disabled Firebase listener - showing results directly in UI
+    // if (user) {
+    //   let unsubscribe;
+    //   
+    //   const setupMessagesListener = async () => {
+    //     unsubscribe = await loadMessagesFromFirebase();
+    //   };
+    //   
+    //   setupMessagesListener();
+    //   
+    //   return () => unsubscribe && unsubscribe();
+    // }
   }, [user]);
   
   // Calculate statistics
@@ -292,87 +293,134 @@ export default function MessagesScreen() {
 
     setLoading(true);
     try {
+      console.log('📱 Starting SMS scan and analysis...');
+      
+      // Step 1: Get real messages from device
       const scannedMessages = await scanSmsMessages();
-      // Only keep messages that look like transactions (sent/received/withdrawn/airtime)
+      console.log(`📨 Found ${scannedMessages.length} messages`);
+      
+      // Step 2: Filter for transaction messages
       const transactionKeywords = [
-        'sent', 'received', 'withdrawn', 'bought airtime', 'buy airtime', 'payment', 'paid', 'deposit', 'credited', 'debited', 'transfer'
+        'sent', 'received', 'withdrawn', 'bought airtime', 'buy airtime', 
+        'payment', 'paid', 'deposit', 'credited', 'debited', 'transfer',
+        'rwf', 'frw', 'amount', 'balance', 'transaction', 'ref:', 'mtn', 'airtel'
       ];
+      
       const transactionMessages = scannedMessages.filter(m =>
-        transactionKeywords.some(keyword => m.text && m.text.toLowerCase().includes(keyword))
+        transactionKeywords.some(keyword => 
+          m.text && m.text.toLowerCase().includes(keyword.toLowerCase())
+        )
       );
       
-      // Analyze messages with comprehensive API (financial + spam detection)
-      try {
-        console.log('🔍 Analyzing messages with unified API...');
-        
-        // Use comprehensive analysis API for both financial and spam detection
-        const messageTexts = transactionMessages.map(m => m.text);
-        const comprehensiveResult = await analyzeMessagesComprehensive(messageTexts, user?.uid);
-        
-        if (comprehensiveResult.success) {
-          console.log('✅ Comprehensive analysis successful');
-          
-          // Process results from comprehensive analysis
-          const analyzedMessages = transactionMessages.map((message, index) => {
-            const spamResult = comprehensiveResult.data.spam_analysis.results.find(r => r.message_index === index);
-            const financialData = comprehensiveResult.data.financial_summary;
-            
-            // Determine status based on spam detection
-            let status = 'safe';
-            if (spamResult?.prediction.is_spam) {
-              status = spamResult.prediction.confidence > 0.8 ? 'fraud' : 'suspicious';
-            }
-            
-            return {
-              ...message,
-              status,
-              analysis: spamResult 
-                ? `${spamResult.prediction.is_spam ? '🚨 SPAM detected' : '✅ Legitimate'} (${Math.round(spamResult.prediction.confidence * 100)}% confidence)`
-                : 'Analysis completed',
-              spamData: spamResult?.prediction,
-              financialData: financialData
-            };
-          });
-          
-          // Save analyzed messages to Firebase
-          for (const message of analyzedMessages) {
-            await saveMessageToFirebase(message);
-          }
-          
-          // Update dashboard with financial summary
-          console.log('💰 Financial Summary:', comprehensiveResult.data.financial_summary);
-          console.log('🛡️ Spam Analysis:', comprehensiveResult.data.spam_analysis);
-          
-        } else {
-          console.log('⚠️ Comprehensive analysis failed, falling back to individual analysis');
-          
-          // Fallback to individual message analysis
-          const analyzedMessages = await analyzeMessages(transactionMessages);
-          
-          // Save analyzed messages to Firebase
-          for (const message of analyzedMessages) {
-            await saveMessageToFirebase(message);
-          }
-        }
-        
+      console.log(`💰 Found ${transactionMessages.length} transaction-related messages`);
+      
+      if (transactionMessages.length === 0) {
+        Alert.alert('No Transaction Messages', 'No transaction-related messages found to analyze.');
         setScanComplete(true);
-      } catch (apiError) {
-        console.log('API analysis failed, using basic analysis:', apiError);
-        
-        // Save unanalyzed messages to Firebase as fallback
-        for (const message of transactionMessages) {
-          await saveMessageToFirebase({
-            ...message,
-            status: 'unknown',
-            analysis: 'Analysis unavailable - manual review needed'
-          });
-        }
-        
-        setScanComplete(true);
+        setLoading(false);
+        return;
       }
+      
+      // Step 3: Extract message texts and send to predict-spam endpoint
+      const messageTexts = transactionMessages.map(m => m.text).filter(text => text && text.trim());
+      console.log('🔍 Sending messages to spam detection API...');
+      
+      try {
+        // Send all messages to predict-spam endpoint
+        const spamAnalysisResult = await scanMessages(messageTexts);
+        console.log('🛡️ Spam analysis result:', spamAnalysisResult);
+        
+        // Step 4: Process results and update message status
+        const analyzedMessages = transactionMessages.map((message, index) => {
+          let status = 'safe';
+          let analysis = '✅ Message appears legitimate';
+          let confidence = 0;
+          let resultData = null;
+          
+          // Handle both single result and array of results
+          if (Array.isArray(spamAnalysisResult)) {
+            resultData = spamAnalysisResult[index];
+          } else {
+            // Single result for all messages
+            resultData = spamAnalysisResult;
+          }
+          
+          // Process the result data with proper null checks
+          if (resultData) {
+            confidence = resultData.confidence || 0;
+            const label = resultData.label || 'unknown';
+            
+            if (label === 'spam' || label === 'fraud') {
+              status = confidence > 0.8 ? 'fraud' : 'suspicious';
+              analysis = `🚨 ${label.toUpperCase()} detected (${Math.round(confidence * 100)}% confidence)`;
+            } else if (label === 'error' || label === 'no_data') {
+              status = 'unknown';
+              analysis = `❓ Analysis inconclusive (${label})`;
+            } else {
+              analysis = `✅ Legitimate (${Math.round(confidence * 100)}% confidence)`;
+            }
+          } else {
+            status = 'unknown';
+            analysis = '❓ Analysis failed - no result data';
+          }
+          
+          return {
+            ...message,
+            status,
+            analysis,
+            spamData: {
+              confidence: confidence || 0,
+              label: resultData?.label || 'unknown',
+              probabilities: resultData?.probabilities || { unknown: 1.0 }
+            },
+            timestamp: message.timestamp || new Date().toLocaleString(),
+            processed: true
+          };
+        });
+        
+        // Step 5: Display analyzed messages directly in UI (no Firebase save)
+        console.log('� Displaying analyzed messages in UI...');
+        setMessages(analyzedMessages);
+        setScanComplete(true);
+        
+        // Step 6: Show analysis summary
+        const spamCount = analyzedMessages.filter(m => m.status === 'fraud').length;
+        const suspiciousCount = analyzedMessages.filter(m => m.status === 'suspicious').length;
+        const safeCount = analyzedMessages.filter(m => m.status === 'safe').length;
+        
+        console.log(`📊 Analysis Summary: ${safeCount} safe, ${suspiciousCount} suspicious, ${spamCount} fraud`);
+        
+        Alert.alert(
+          'Scan Complete', 
+          `Analyzed ${analyzedMessages.length} messages:\n• ${safeCount} safe\n• ${suspiciousCount} suspicious\n• ${spamCount} fraud/spam`,
+          [{ text: 'OK' }]
+        );
+        
+      } catch (apiError) {
+        console.error('❌ API analysis failed:', apiError);
+        
+        // Fallback: Show messages with unknown status (no Firebase save)
+        const fallbackMessages = transactionMessages.map(message => ({
+          ...message,
+          status: 'unknown',
+          analysis: 'Analysis unavailable - API error. Manual review needed.',
+          timestamp: message.timestamp || new Date().toLocaleString(),
+          processed: false
+        }));
+        
+        setMessages(fallbackMessages);
+        setScanComplete(true);
+        
+        Alert.alert(
+          'Analysis Failed', 
+          'Could not analyze messages due to API error. Messages displayed for manual review.',
+          [{ text: 'OK' }]
+        );
+      }
+      
     } catch (error) {
-      console.error('Scan failed:', error);
-      Alert.alert('Scan Failed', 'SMS scan failed. Please try again.');
+      console.error('❌ Scan failed:', error);
+      Alert.alert('Scan Failed', `SMS scan failed: ${error.message}. Please try again.`);
     } finally {
       setLoading(false);
     }
@@ -389,16 +437,62 @@ export default function MessagesScreen() {
     setIosLoading(true);
     setIosResult(null);
     try {
-      const analyzed = await analyzeMessages([{ id: 'ios', text: iosInput }]);
-      const analyzedMessage = analyzed[0];
+      console.log('🔍 Analyzing pasted message with spam detection...');
       
-      // Save the analyzed message to Firebase
-      await saveMessageToFirebase(analyzedMessage);
+      // Use the predict-spam endpoint for analysis
+      const spamResult = await scanMessages([iosInput]);
+      console.log('🛡️ Spam analysis result:', spamResult);
       
+      let status = 'safe';
+      let analysis = '✅ Message appears legitimate';
+      let confidence = spamResult?.confidence || 0;
+      let label = spamResult?.label || 'unknown';
+      
+      if (label === 'spam' || label === 'fraud') {
+        status = confidence > 0.8 ? 'fraud' : 'suspicious';
+        analysis = `🚨 ${label.toUpperCase()} detected (${Math.round(confidence * 100)}% confidence)`;
+      } else if (label === 'error' || label === 'no_data') {
+        status = 'unknown';
+        analysis = `❓ Analysis inconclusive (${label})`;
+      } else {
+        analysis = `✅ Legitimate (${Math.round(confidence * 100)}% confidence)`;
+      }
+      
+      const analyzedMessage = {
+        id: 'ios-' + Date.now(),
+        text: iosInput,
+        status,
+        analysis,
+        spamData: {
+          confidence: confidence || 0,
+          label: label || 'unknown',
+          probabilities: spamResult?.probabilities || { unknown: 1.0 }
+        },
+        timestamp: new Date().toLocaleString(),
+        sender: 'Manual Input',
+        type: 'manual',
+        processed: true
+      };
+      
+      // Display the analyzed message directly in UI (no Firebase save)
+      setMessages(prevMessages => [analyzedMessage, ...prevMessages]);
       setIosResult(analyzedMessage);
+      setIosInput(''); // Clear input after successful analysis
+      
     } catch (e) {
-      const fallbackResult = { status: 'suspicious', analysis: 'API error' };
-      await saveMessageToFirebase({ id: 'ios', text: iosInput, ...fallbackResult });
+      console.error('❌ iOS analysis failed:', e);
+      const fallbackResult = { 
+        id: 'ios-' + Date.now(),
+        text: iosInput,
+        status: 'unknown', 
+        analysis: 'Analysis failed - API error. Manual review needed.',
+        timestamp: new Date().toLocaleString(),
+        sender: 'Manual Input',
+        type: 'manual',
+        processed: false
+      };
+      // Display fallback result directly in UI (no Firebase save)
+      setMessages(prevMessages => [fallbackResult, ...prevMessages]);
       setIosResult(fallbackResult);
     } finally {
       setIosLoading(false);
