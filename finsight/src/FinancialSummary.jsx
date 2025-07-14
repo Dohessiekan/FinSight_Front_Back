@@ -10,7 +10,7 @@ const FinancialSummary = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Mock financial data
+  // Mock financial data from mobile app transactions
   const financialData = {
     'this-month': {
       totalTransactions: 15420,
@@ -19,7 +19,9 @@ const FinancialSummary = () => {
       averageTransaction: 184523,
       suspiciousTransactions: 156,
       flaggedAmount: 89420000,
-      recovery: 67800000
+      recovery: 67800000,
+      mobileAppScans: 28547,
+      appUserSavings: 450280000
     },
     'last-month': {
       totalTransactions: 14180,
@@ -109,7 +111,7 @@ const FinancialSummary = () => {
 
   return (
     <div className="financial-summary-container">
-      <PageHeader title="Financial Summary" />
+      <PageHeader title="Mobile App Financial Impact Analytics" />
       <button onClick={fetchSummary} style={{marginBottom: 16}}>Fetch SMS Summary (Demo)</button>
       {loading && <div>Loading summary...</div>}
       {error && <div style={{color: 'red'}}>{error}</div>}

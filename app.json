@@ -1,5 +1,10 @@
 {
   "android": {
     "package": "com.anonymous.finsight_front_back1"
+  },
+  "extra": {
+    "eas": {
+      "projectId": "703cb1de-bc03-465b-a440-3516f97eeece"
+    }
   }
 }

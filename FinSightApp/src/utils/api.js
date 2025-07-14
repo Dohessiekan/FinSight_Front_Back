@@ -58,9 +58,11 @@ export async function getWeeklySummary(userId) {
 export async function getSmsSummary(messages) {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for analysis
     
-    const response = await fetch(`${API_BASE_URL}/predict`, {
+    console.log('Sending request to predict-sms endpoint with', messages.length, 'messages');
+    
+    const response = await fetch(`${API_BASE_URL}/predict-sms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages }),
@@ -74,10 +76,24 @@ export async function getSmsSummary(messages) {
     }
     
     const data = await response.json();
-    console.log('Raw API response:', data);
-    return data;
+    console.log('Financial summary from predict-sms endpoint:', data);
+    
+    // Return the financial summary data
+    return {
+      transactions_count: data.transactions_count || 0,
+      amount_transactions_count: data.amount_transactions_count || 0,
+      total_sent: data.total_sent || 0,
+      total_received: data.total_received || 0,
+      total_withdrawn: data.total_withdrawn || 0,
+      total_airtime: data.total_airtime || 0,
+      latest_balance: data.latest_balance || 0,
+      suspicious_transactions: 0, // This endpoint focuses on financial analysis
+      fraud_indicators: [],
+      monthly_summary: data.monthly_summary || {},
+      message: `Real SMS analysis completed successfully. Processed ${data.transactions_count || 0} messages, found ${data.amount_transactions_count || 0} with financial amounts.`
+    };
   } catch (error) {
-    console.error('Error getting SMS summary:', error);
+    console.error('Error getting SMS summary from predict-sms:', error);
     
     // Return mock data when API fails
     if (error.name === 'AbortError' || error.message.includes('timeout')) {
@@ -86,9 +102,12 @@ export async function getSmsSummary(messages) {
         transactions_count: 5,
         total_sent: 125000,
         total_received: 245000,
+        total_withdrawn: 50000,
+        total_airtime: 15000,
         latest_balance: 185000,
         suspicious_transactions: 1,
         fraud_indicators: [],
+        monthly_summary: {},
         message: 'API timeout - showing sample data'
       };
     }
@@ -98,10 +117,13 @@ export async function getSmsSummary(messages) {
       transactions_count: 3,
       total_sent: 75000,
       total_received: 150000,
+      total_withdrawn: 30000,
+      total_airtime: 5000,
       latest_balance: 125000,
       suspicious_transactions: 0,
       fraud_indicators: [],
-      message: 'API unavailable - showing sample data'
+      monthly_summary: {},
+      message: `API error: ${error.message} - showing sample data`
     };
   }
 }
@@ -304,6 +326,182 @@ export async function detectSpamBatch(messages) {
       success: false,
       error: error.message,
       results: []
+    };
+  }
+}
+
+// Dedicated function for analyzing current month SMS messages
+export async function analyzeCurrentMonthSMS(smsService) {
+  try {
+    console.log('Starting current month SMS analysis...');
+    
+    // Check permissions
+    const hasPermissions = await smsService.checkSMSPermissions();
+    if (!hasPermissions) {
+      const granted = await smsService.requestSMSPermissions();
+      if (!granted) {
+        throw new Error('SMS permissions required');
+      }
+    }
+
+    // Get all SMS messages
+    const allMessages = await smsService.getAllSMS({ maxCount: 1000 });
+    console.log(`Retrieved ${allMessages.length} total SMS messages`);
+    
+    // Filter to current month
+    const currentDate = new Date();
+    const currentMonth = currentDate.getMonth();
+    const currentYear = currentDate.getFullYear();
+    
+    const currentMonthMessages = allMessages.filter(message => {
+      const messageDate = new Date(parseInt(message.date));
+      return messageDate.getMonth() === currentMonth && 
+             messageDate.getFullYear() === currentYear;
+    });
+    
+    console.log(`Found ${currentMonthMessages.length} messages from current month`);
+    
+    if (currentMonthMessages.length === 0) {
+      return {
+        success: false,
+        error: 'No SMS messages found for current month',
+        data: {
+          transactions_count: 0,
+          total_sent: 0,
+          total_received: 0,
+          total_withdrawn: 0,
+          total_airtime: 0,
+          latest_balance: 0,
+          monthly_summary: {},
+          message: 'No messages from current month'
+        }
+      };
+    }
+
+    // Extract message texts and filter for financial transactions
+    const messageTexts = currentMonthMessages.map(msg => msg.body || msg.text || '');
+    
+    // More comprehensive filtering for transaction-related messages
+    const transactionMessages = messageTexts.filter(text => {
+      const textLower = text.toLowerCase();
+      
+      // Core financial indicators
+      const hasFinancialKeywords = textLower.includes('rwf') || 
+                                   textLower.includes('balance') || 
+                                   textLower.includes('transaction');
+      
+      // Payment/Transfer keywords
+      const hasPaymentKeywords = textLower.includes('payment') || 
+                                  textLower.includes('paid') || 
+                                  textLower.includes('transfer') || 
+                                  textLower.includes('sent') || 
+                                  textLower.includes('send') ||
+                                  textLower.includes('received') || 
+                                  textLower.includes('receive') ||
+                                  textLower.includes('deposit') ||
+                                  textLower.includes('credited') ||
+                                  textLower.includes('debited');
+      
+      // Banking/Mobile Money keywords
+      const hasBankingKeywords = textLower.includes('withdraw') || 
+                                 textLower.includes('airtime') ||
+                                 textLower.includes('bundle') ||
+                                 textLower.includes('momo') ||
+                                 textLower.includes('mobile money') ||
+                                 textLower.includes('bank') ||
+                                 textLower.includes('atm') ||
+                                 textLower.includes('account');
+      
+      // Service providers (Rwanda specific)
+      const hasProviderKeywords = textLower.includes('mtn') ||
+                                  textLower.includes('airtel') ||
+                                  textLower.includes('tigo') ||
+                                  textLower.includes('bk') ||
+                                  textLower.includes('equity') ||
+                                  textLower.includes('cogebanque') ||
+                                  textLower.includes('ecobank');
+      
+      // Financial amounts (numbers with common currency formats)
+      const hasAmountPattern = /\d+(?:,\d{3})*\s*(?:rwf|frw|rf)/i.test(text) ||
+                               /(?:rwf|frw|rf)\s*\d+(?:,\d{3})*/i.test(text);
+      
+      // Balance or account information
+      const hasBalanceInfo = textLower.includes('your balance') ||
+                             textLower.includes('new balance') ||
+                             textLower.includes('current balance') ||
+                             textLower.includes('remaining balance') ||
+                             textLower.includes('account balance');
+      
+      // Return true if message has any financial relevance
+      return hasFinancialKeywords || 
+             hasPaymentKeywords || 
+             hasBankingKeywords || 
+             hasProviderKeywords || 
+             hasAmountPattern || 
+             hasBalanceInfo ||
+             // Even broader catch for any message mentioning money-related terms
+             textLower.includes('money') ||
+             textLower.includes('cash') ||
+             textLower.includes('fund') ||
+             textLower.includes('bill') ||
+             textLower.includes('fee') ||
+             textLower.includes('charge') ||
+             textLower.includes('cost') ||
+             textLower.includes('price') ||
+             textLower.includes('amount') ||
+             textLower.includes('total') ||
+             textLower.includes('salary') ||
+             textLower.includes('loan') ||
+             textLower.includes('debt') ||
+             textLower.includes('refund');
+    });
+
+    console.log(`Found ${transactionMessages.length} transaction-related messages`);
+    
+    if (transactionMessages.length === 0) {
+      console.log('No transaction messages found. Sample messages:', messageTexts.slice(0, 3));
+      return {
+        success: false,
+        error: 'No transaction messages found for current month',
+        data: {
+          transactions_count: currentMonthMessages.length,
+          amount_transactions_count: 0,
+          total_sent: 0,
+          total_received: 0,
+          total_withdrawn: 0,
+          total_airtime: 0,
+          latest_balance: 0,
+          monthly_summary: {},
+          message: `Found ${currentMonthMessages.length} SMS messages but none appear to be transaction-related`
+        }
+      };
+    }
+
+    // Send to API for financial analysis
+    const summary = await getSmsSummary(transactionMessages);
+    
+    return {
+      success: true,
+      data: summary,
+      messageCount: currentMonthMessages.length,
+      transactionCount: transactionMessages.length
+    };
+    
+  } catch (error) {
+    console.error('Error analyzing current month SMS:', error);
+    return {
+      success: false,
+      error: error.message,
+      data: {
+        transactions_count: 0,
+        total_sent: 0,
+        total_received: 0,
+        total_withdrawn: 0,
+        total_airtime: 0,
+        latest_balance: 0,
+        monthly_summary: {},
+        message: `Analysis failed: ${error.message}`
+      }
     };
   }
 }

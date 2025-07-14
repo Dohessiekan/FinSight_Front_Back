@@ -13,19 +13,19 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-// Sample fraud detection points
+// Sample fraud detection points in Rwanda
 const fraudPoints = [
-  { id: 1, lat: 40.7128, lng: -74.0060, location: "New York", type: "SMS Scam", amount: "$1,200", date: "2025-06-15" },
-  { id: 2, lat: 34.0522, lng: -118.2437, location: "Los Angeles", type: "Phone Fraud", amount: "$850", date: "2025-06-14" },
-  { id: 3, lat: 41.8781, lng: -87.6298, location: "Chicago", type: "SMS Scam", amount: "$2,100", date: "2025-06-13" },
-  { id: 4, lat: 29.7604, lng: -95.3698, location: "Houston", type: "Financial Fraud", amount: "$3,500", date: "2025-06-12" },
-  { id: 5, lat: 39.9526, lng: -75.1652, location: "Philadelphia", type: "Phone Fraud", amount: "$675", date: "2025-06-11" }
+  { id: 1, lat: -1.9441, lng: 30.0619, location: "Kigali", type: "SMS Scam", amount: "50,000 RWF", date: "2025-07-14" },
+  { id: 2, lat: -2.6080, lng: 29.1378, location: "Butare", type: "Mobile Money Fraud", amount: "75,000 RWF", date: "2025-07-13" },
+  { id: 3, lat: -1.6767, lng: 30.4375, location: "Rwamagana", type: "SMS Scam", amount: "30,000 RWF", date: "2025-07-13" },
+  { id: 4, lat: -2.0280, lng: 30.0890, location: "Nyanza", type: "Financial Fraud", amount: "120,000 RWF", date: "2025-07-12" },
+  { id: 5, lat: -1.7090, lng: 30.1367, location: "Kayonza", type: "Phone Fraud", amount: "25,000 RWF", date: "2025-07-12" }
 ];
 
 const Overview = () => {
   return (
     <div className="overview-container">
-      <PageHeader title="Overview Page" />
+      <PageHeader title="Admin Dashboard - FinSight Rwanda" />
       
       <div className="stats-container">
         <div className="stat-card">
@@ -34,8 +34,8 @@ const Overview = () => {
             alt="Phone" 
             className="stat-icon"
           />
-          <div className="stat-number">127</div>
-          <div className="stat-text">Suspicious Numbers</div>
+          <div className="stat-number">2,847</div>
+          <div className="stat-text">Mobile App Users</div>
         </div>
         <div className="stat-card">
           <img 
@@ -43,8 +43,8 @@ const Overview = () => {
             alt="SMS" 
             className="stat-icon"
           />
-          <div className="stat-number">43</div>
-          <div className="stat-text">Messages Flagged</div>
+          <div className="stat-number">156</div>
+          <div className="stat-text">SMS Analyzed Today</div>
         </div>
         <div className="stat-card">
           <img 
@@ -52,18 +52,27 @@ const Overview = () => {
             alt="Phone" 
             className="stat-icon"
           />
-          <div className="stat-number">18</div>
-          <div className="stat-text">Scam Attempts Prevented</div>
+          <div className="stat-number">1,245</div>
+          <div className="stat-text">Fraud Prevented</div>
+        </div>
+        <div className="stat-card">
+          <img 
+            src={process.env.PUBLIC_URL + '/stats.svg'} 
+            alt="Stats" 
+            className="stat-icon"
+          />
+          <div className="stat-number">94.7%</div>
+          <div className="stat-text">ML Model Accuracy</div>
         </div>
       </div>
 
       <div className="map-section">
         <div className="map-container">
-          <h3 className="map-title">Fraud Activity Map</h3>
+          <h3 className="map-title">Fraud Activity Map - Rwanda</h3>
           <div className="map-wrapper">
             <MapContainer
-              center={[39.8283, -98.5795]} // Center of USA
-              zoom={4}
+              center={[-1.9403, 29.8739]} // Center of Rwanda
+              zoom={8}
               style={{ height: '400px', width: '100%', borderRadius: '8px' }}
             >
               <TileLayer
@@ -127,6 +136,129 @@ const Overview = () => {
               <div className="insight-item">
                 <span className="insight-label">Detection Accuracy Rate:</span>
                 <span className="insight-value">28.4%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile App Status Section */}
+      <div className="mobile-app-section" style={{ marginTop: '20px' }}>
+        <div className="mobile-app-container" style={{ 
+          background: 'white', 
+          borderRadius: '12px', 
+          padding: '20px', 
+          boxShadow: '0 4px 12px rgba(40, 83, 191, 0.15)' 
+        }}>
+          <h3 style={{ color: '#2c3e50', marginBottom: '20px' }}>📱 Mobile App Status & Monitoring</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+            
+            {/* App Usage Stats */}
+            <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #e9ecef' }}>
+              <h4 style={{ color: '#495057', marginBottom: '15px' }}>📊 App Usage Analytics</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Daily Active Users:</span>
+                  <strong style={{ color: '#28a745' }}>1,432</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>SMS Scans Today:</span>
+                  <strong style={{ color: '#007bff' }}>3,847</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>App Crashes:</span>
+                  <strong style={{ color: '#dc3545' }}>2</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Avg Session Time:</span>
+                  <strong>4m 32s</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* API Performance */}
+            <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #e9ecef' }}>
+              <h4 style={{ color: '#495057', marginBottom: '15px' }}>🚀 API Performance</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>API Uptime:</span>
+                  <strong style={{ color: '#28a745' }}>99.8%</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Avg Response Time:</span>
+                  <strong style={{ color: '#28a745' }}>127ms</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Requests Today:</span>
+                  <strong style={{ color: '#007bff' }}>28,542</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Error Rate:</span>
+                  <strong style={{ color: '#ffc107' }}>0.2%</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* ML Model Performance */}
+            <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #e9ecef' }}>
+              <h4 style={{ color: '#495057', marginBottom: '15px' }}>🤖 ML Model Status</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Model Version:</span>
+                  <strong>v2.1.4</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Accuracy Rate:</span>
+                  <strong style={{ color: '#28a745' }}>94.7%</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Last Training:</span>
+                  <strong>2025-07-10</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Predictions Today:</span>
+                  <strong style={{ color: '#007bff' }}>3,721</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* User Behavior */}
+            <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #e9ecef' }}>
+              <h4 style={{ color: '#495057', marginBottom: '15px' }}>👥 User Behavior</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>New Registrations:</span>
+                  <strong style={{ color: '#28a745' }}>47</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Frauds Reported:</span>
+                  <strong style={{ color: '#dc3545' }}>23</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>App Rating:</span>
+                  <strong style={{ color: '#ffc107' }}>4.6⭐</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Feature Usage:</span>
+                  <strong>SMS Scan: 89%</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Real-time Alerts */}
+          <div style={{ marginTop: '20px', background: '#fff3cd', padding: '15px', borderRadius: '8px', border: '1px solid #ffeaa7' }}>
+            <h4 style={{ color: '#856404', marginBottom: '10px' }}>⚠️ Real-time Mobile App Alerts</h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ fontSize: '14px', color: '#856404' }}>
+                • High SMS scanning activity detected in Kigali region (+23% from yesterday)
+              </div>
+              <div style={{ fontSize: '14px', color: '#856404' }}>
+                • 5 new fraud patterns detected and added to ML model
+              </div>
+              <div style={{ fontSize: '14px', color: '#856404' }}>
+                • User reported false positive decreased by 12% this week
               </div>
             </div>
           </div>

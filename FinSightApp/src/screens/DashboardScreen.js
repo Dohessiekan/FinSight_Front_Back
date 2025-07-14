@@ -358,36 +358,45 @@ export default function DashboardScreen({ navigation }) {
     setApiLoading(true);
     setApiError(null);
     try {
-      // In a real app, this would get messages data from shared state or navigate to Messages
-      // For now, we'll use mock transaction messages to demonstrate API integration
-      const mockTransactionMessages = [
-        'Received RWF 50,000 from John Doe. Your balance is RWF 125,000.',
-        'Sent RWF 25,000 to Jane Smith. Your balance is RWF 100,000.',
-        'Withdrawn RWF 30,000 from ATM. Your balance is RWF 70,000.',
-        'Bought airtime worth RWF 5,000. Your balance is RWF 65,000.',
-        'Received RWF 120,000 salary deposit. Your balance is RWF 185,000.'
-      ];
+      // Import SMS Service and dedicated analysis function
+      const SMSService = (await import('../services/SMSService')).default;
+      const { analyzeCurrentMonthSMS } = await import('../utils/api');
       
-      const summary = await getSmsSummary(mockTransactionMessages);
-      setApiSummary(summary);
+      console.log('Starting real SMS analysis...');
       
-      // Show message to user if API was unavailable
-      if (summary.message) {
-        setApiError(summary.message);
-      }
+      // Use the dedicated analysis function
+      const result = await analyzeCurrentMonthSMS(SMSService);
       
-      // Update fraud score based on API response
-      if (summary.suspicious_transactions > 0) {
-        setFraudScore(Math.min(50 + (summary.suspicious_transactions * 10), 95));
+      if (result.success) {
+        setApiSummary(result.data);
+        console.log(`Analysis complete: ${result.transactionCount} transactions from ${result.messageCount} SMS messages`);
+        
+        // Update fraud score based on API response
+        if (result.data.suspicious_transactions > 0) {
+          setFraudScore(Math.min(50 + (result.data.suspicious_transactions * 10), 95));
+        } else {
+          setFraudScore(Math.max(5, 15 - (result.data.transactions_count || 0)));
+        }
       } else {
-        setFraudScore(Math.max(5, 15 - (summary.transactions_count || 0)));
+        setApiError(result.error);
+        setApiSummary(result.data);
       }
       
-      console.log('API Summary:', summary);
     } catch (error) {
-      // This shouldn't happen now since API returns mock data on error
-      setApiError('Unable to fetch data');
-      console.error('Error fetching SMS summary:', error);
+      console.error('Error in fetchRealSummary:', error);
+      setApiError(`Failed to analyze SMS: ${error.message}`);
+      
+      // Fallback summary
+      setApiSummary({
+        transactions_count: 0,
+        total_sent: 0,
+        total_received: 0,
+        total_withdrawn: 0,
+        total_airtime: 0,
+        latest_balance: 0,
+        monthly_summary: {},
+        message: `Error: ${error.message}`
+      });
     } finally {
       setApiLoading(false);
     }
@@ -527,41 +536,68 @@ export default function DashboardScreen({ navigation }) {
         <Card style={styles.summaryCard} variant="elevated">
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Financial Summary</Text>
-            {apiSummary && (
-              <TouchableOpacity onPress={fetchRealSummary}>
-                <Text style={styles.refreshText}>Refresh</Text>
-              </TouchableOpacity>
-            )}
           </View>
           
           <View style={styles.summaryGrid}>
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>
-                {apiSummary ? `RWF ${apiSummary.total_sent?.toLocaleString() || '0'}` : 'RWF 250,000'}
-              </Text>
-              <Text style={styles.summaryLabel}>Sent</Text>
-            </View>
-            
-            <View style={styles.summaryItem}>
-              <Text style={[styles.summaryValue, { color: colors.success }]}>
-                {apiSummary ? `RWF ${apiSummary.total_received?.toLocaleString() || '0'}` : 'RWF 450,000'}
-              </Text>
-              <Text style={styles.summaryLabel}>Received</Text>
-            </View>
-            
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>
-                {apiSummary ? apiSummary.transactions_count || 0 : 15}
-              </Text>
-              <Text style={styles.summaryLabel}>Transactions</Text>
-            </View>
-            
-            <View style={styles.summaryItem}>
-              <Text style={[styles.summaryValue, { color: colors.primary }]}>
-                {apiSummary ? `RWF ${apiSummary.latest_balance?.toLocaleString() || '0'}` : 'RWF 185,000'}
-              </Text>
-              <Text style={styles.summaryLabel}>Balance</Text>
-            </View>
+            {apiSummary ? (
+              <>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryValue}>
+                    {`RWF ${apiSummary.total_sent?.toLocaleString() || '0'}`}
+                  </Text>
+                  <Text style={styles.summaryLabel}>Sent</Text>
+                </View>
+                
+                <View style={styles.summaryItem}>
+                  <Text style={[styles.summaryValue, { color: colors.success }]}>
+                    {`RWF ${apiSummary.total_received?.toLocaleString() || '0'}`}
+                  </Text>
+                  <Text style={styles.summaryLabel}>Received</Text>
+                </View>
+                
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryValue}>
+                    {apiSummary.transactions_count || 0}
+                  </Text>
+                  <Text style={styles.summaryLabel}>
+                    {apiSummary.amount_transactions_count ? 
+                      `Messages (${apiSummary.amount_transactions_count} with amounts)` : 
+                      'Messages'
+                    }
+                  </Text>
+                </View>
+                
+                <View style={styles.summaryItem}>
+                  <Text style={[styles.summaryValue, { color: colors.primary }]}>
+                    {`RWF ${apiSummary.latest_balance?.toLocaleString() || '0'}`}
+                  </Text>
+                  <Text style={styles.summaryLabel}>Balance</Text>
+                </View>
+                
+                {apiSummary.total_withdrawn > 0 && (
+                  <View style={styles.summaryItem}>
+                    <Text style={[styles.summaryValue, { color: colors.warning }]}>
+                      {`RWF ${apiSummary.total_withdrawn?.toLocaleString() || '0'}`}
+                    </Text>
+                    <Text style={styles.summaryLabel}>Withdrawn</Text>
+                  </View>
+                )}
+                
+                {apiSummary.total_airtime > 0 && (
+                  <View style={styles.summaryItem}>
+                    <Text style={[styles.summaryValue, { color: '#8b5cf6' }]}>
+                      {`RWF ${apiSummary.total_airtime?.toLocaleString() || '0'}`}
+                    </Text>
+                    <Text style={styles.summaryLabel}>Payment</Text>
+                  </View>
+                )}
+              </>
+            ) : (
+              <View style={styles.placeholderContainer}>
+                <MaterialIcons name="analytics" size={48} color={colors.textSecondary} />
+                <Text style={styles.placeholderText}>Click "Get Real Summary" to analyze your SMS transactions</Text>
+              </View>
+            )}
           </View>
           
           {!apiSummary && (
@@ -572,7 +608,20 @@ export default function DashboardScreen({ navigation }) {
             >
               <MaterialIcons name="refresh" size={20} color={colors.white} />
               <Text style={styles.fetchButtonText}>
-                {apiLoading ? 'Loading...' : 'Get Real Summary'}
+                {apiLoading ? 'Analyzing SMS...' : 'Get Real Summary'}
+              </Text>
+            </TouchableOpacity>
+          )}
+          
+          {apiSummary && (
+            <TouchableOpacity 
+              style={[styles.refreshButton, apiLoading && styles.fetchButtonDisabled]} 
+              onPress={fetchRealSummary}
+              disabled={apiLoading}
+            >
+              <MaterialIcons name="refresh" size={16} color={colors.primary} />
+              <Text style={styles.refreshButtonText}>
+                {apiLoading ? 'Updating...' : 'Refresh Data'}
               </Text>
             </TouchableOpacity>
           )}
@@ -581,6 +630,19 @@ export default function DashboardScreen({ navigation }) {
             <View style={styles.errorContainer}>
               <MaterialIcons name="info" size={16} color={colors.warning} />
               <Text style={styles.errorText}>{apiError}</Text>
+            </View>
+          )}
+          
+          {/* Monthly Breakdown - show if we have monthly summary from API */}
+          {apiSummary && apiSummary.monthly_summary && Object.keys(apiSummary.monthly_summary).length > 0 && (
+            <View style={styles.monthlyBreakdown}>
+              <Text style={[styles.sectionTitle, { fontSize: 16, marginBottom: 12 }]}>Monthly Outgoing (Sent + Payments)</Text>
+              {Object.entries(apiSummary.monthly_summary).map(([month, amount]) => (
+                <View key={month} style={styles.monthlyItem}>
+                  <Text style={styles.monthlyMonth}>{month}</Text>
+                  <Text style={styles.monthlyAmount}>RWF {amount?.toLocaleString() || '0'}</Text>
+                </View>
+              ))}
             </View>
           )}
         </Card>
@@ -870,6 +932,38 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  refreshButton: {
+    flexDirection: 'row',
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.primary,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 12,
+  },
+  refreshButtonText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  placeholderContainer: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 32,
+    paddingHorizontal: 16,
+  },
+  placeholderText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   errorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1076,5 +1170,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     marginBottom: 2,
+  },
+  monthlyBreakdown: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  monthlyItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  monthlyMonth: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  monthlyAmount: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
   },
 });

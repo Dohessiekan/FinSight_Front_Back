@@ -203,32 +203,63 @@ def parse_sms(sms):
     date = None
     balance = None
     
-    # Enhanced patterns for your specific message format
-    # Pattern: "2000 RWF transferred to" or "transferred to ... 2000 RWF"
-    transfer_patterns = [
-        r'(\d+(?:,\d{3})*)\s*rwf\s+transferred\s+to',  # "2000 RWF transferred to"
-        r'transferred\s+to.*?(\d+(?:,\d{3})*)\s*rwf',   # "transferred to ... 2000 RWF"
-        r'(\d+(?:,\d{3})*)\s*rwf.*?transferred',        # "2000 RWF ... transferred"
+    # More comprehensive transaction detection patterns
+    
+    # SENT/TRANSFER patterns (money going out)
+    sent_keywords = ['sent', 'transferred', 'paid', 'payment to', 'transfer to', 'sent to', 'paid to']
+    sent_patterns = [
+        r'(\d+(?:,\d{3})*)\s*rwf\s+(?:sent|transferred|paid)\s+to',
+        r'(?:sent|transferred|paid).*?(\d+(?:,\d{3})*)\s*rwf',
+        r'payment\s+of\s+(\d+(?:,\d{3})*)\s*rwf\s+to',
+        r'transfer\s+of\s+(\d+(?:,\d{3})*)\s*rwf',
+        r'you\s+have\s+sent\s+(\d+(?:,\d{3})*)\s*rwf',
     ]
     
-    # Pattern: "received ... RWF from" or "RWF received from"
+    # RECEIVED patterns (money coming in) - Enhanced with more deposit patterns
+    received_keywords = ['received', 'credited', 'deposit', 'salary', 'refund', 'deposited', 'income', 'earning']
     received_patterns = [
         r'received.*?(\d+(?:,\d{3})*)\s*rwf',
         r'(\d+(?:,\d{3})*)\s*rwf.*?received',
-        r'payment.*?(\d+(?:,\d{3})*)\s*rwf.*?from',
         r'credited.*?(\d+(?:,\d{3})*)\s*rwf',
+        r'deposit.*?(\d+(?:,\d{3})*)\s*rwf',
+        r'deposited.*?(\d+(?:,\d{3})*)\s*rwf',
+        r'(\d+(?:,\d{3})*)\s*rwf.*?deposited',
+        r'(\d+(?:,\d{3})*)\s*rwf.*?deposit',
+        r'you\s+have\s+received\s+(\d+(?:,\d{3})*)\s*rwf',
+        r'payment.*?(\d+(?:,\d{3})*)\s*rwf.*?from',
+        r'income.*?(\d+(?:,\d{3})*)\s*rwf',
+        r'earning.*?(\d+(?:,\d{3})*)\s*rwf',
     ]
     
-    # Check for transferred/sent money
-    for pattern in transfer_patterns:
-        match = re.search(pattern, sms_lower)
-        if match:
-            tx_type = 'sent'
-            amount = safe_float_from_match(match)
-            break
+    # WITHDRAWAL patterns
+    withdraw_patterns = [
+        r'withdrawn.*?(\d+(?:,\d{3})*)\s*rwf',
+        r'(\d+(?:,\d{3})*)\s*rwf.*?withdrawn',
+        r'withdraw.*?(\d+(?:,\d{3})*)\s*rwf',
+        r'cash.*?(\d+(?:,\d{3})*)\s*rwf',
+        r'atm.*?(\d+(?:,\d{3})*)\s*rwf',
+    ]
     
-    # Check for received money
-    if tx_type == 'other':
+    # AIRTIME/BUNDLE patterns
+    airtime_patterns = [
+        r'airtime.*?(\d+(?:,\d{3})*)\s*rwf',
+        r'bundle.*?(\d+(?:,\d{3})*)\s*rwf',
+        r'(\d+(?:,\d{3})*)\s*rwf.*?airtime',
+        r'(\d+(?:,\d{3})*)\s*rwf.*?bundle',
+        r'bought.*?(\d+(?:,\d{3})*)\s*rwf.*?(?:airtime|bundle)',
+    ]
+    
+    # Check for SENT transactions first
+    if any(keyword in sms_lower for keyword in sent_keywords):
+        for pattern in sent_patterns:
+            match = re.search(pattern, sms_lower)
+            if match:
+                tx_type = 'sent'
+                amount = safe_float_from_match(match)
+                break
+    
+    # Check for RECEIVED transactions
+    if tx_type == 'other' and any(keyword in sms_lower for keyword in received_keywords):
         for pattern in received_patterns:
             match = re.search(pattern, sms_lower)
             if match:
@@ -236,25 +267,38 @@ def parse_sms(sms):
                 amount = safe_float_from_match(match)
                 break
     
-    # Check for withdrawal
-    if tx_type == 'other' and ('withdrawn' in sms_lower or 'withdraw' in sms_lower):
-        withdraw_match = re.search(r'(\d+(?:,\d{3})*)\s*rwf', sms_lower)
-        if withdraw_match:
-            tx_type = 'withdrawn'
-            amount = safe_float_from_match(withdraw_match)
+    # Check for WITHDRAWAL
+    if tx_type == 'other' and ('withdraw' in sms_lower or 'atm' in sms_lower or 'cash' in sms_lower):
+        for pattern in withdraw_patterns:
+            match = re.search(pattern, sms_lower)
+            if match:
+                tx_type = 'withdrawn'
+                amount = safe_float_from_match(match)
+                break
     
-    # Check for airtime purchase
+    # Check for AIRTIME purchase
     if tx_type == 'other' and ('airtime' in sms_lower or 'bundle' in sms_lower):
-        airtime_match = re.search(r'(\d+(?:,\d{3})*)\s*rwf', sms_lower)
-        if airtime_match:
-            tx_type = 'airtime'
-            amount = safe_float_from_match(airtime_match)
+        for pattern in airtime_patterns:
+            match = re.search(pattern, sms_lower)
+            if match:
+                tx_type = 'airtime'
+                amount = safe_float_from_match(match)
+                break
     
-    # If still no type found, try to get first amount
-    if tx_type == 'other':
-        fallback_match = re.search(r'(\d+(?:,\d{3})*)\s*rwf', sms_lower)
-        if fallback_match:
-            amount = safe_float_from_match(fallback_match)
+    # If still no specific type found but contains transaction indicators, try to get amount
+    transaction_indicators = ['rwf', 'transaction', 'payment', 'balance', 'account']
+    if tx_type == 'other' and any(indicator in sms_lower for indicator in transaction_indicators):
+        # Try to extract any RWF amount
+        general_amount_match = re.search(r'(\d+(?:,\d{3})*)\s*rwf', sms_lower)
+        if general_amount_match:
+            amount = safe_float_from_match(general_amount_match)
+            # Try to infer transaction type from context
+            if any(word in sms_lower for word in ['to', 'paid', 'sent']):
+                tx_type = 'sent'
+            elif any(word in sms_lower for word in ['from', 'received', 'credited', 'deposit', 'deposited', 'income', 'earning']):
+                tx_type = 'received'
+            else:
+                tx_type = 'transaction'  # Generic transaction type
     
     # Enhanced date parsing for multiple formats
     date_patterns = [
@@ -262,6 +306,7 @@ def parse_sms(sms):
         r'on\s+(\d{4}-\d{2}-\d{2})',                        # "on 2025-07-05"
         r'on\s+(\d{1,2}\s+\w+\s+\d{4})',                   # "on 5 July 2025"
         r'(\d{4}-\d{2}-\d{2})',                             # "2025-07-05"
+        r'(\d{1,2}/\d{1,2}/\d{4})',                         # "05/07/2025"
     ]
     
     for pattern in date_patterns:
@@ -272,9 +317,12 @@ def parse_sms(sms):
                 if ' ' in date_str and ':' in date_str:
                     # Format: "2025-07-05 17:12:24"
                     date = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
-                elif len(date_str) == 10:
+                elif len(date_str) == 10 and '-' in date_str:
                     # Format: "2025-07-05"
                     date = datetime.strptime(date_str, '%Y-%m-%d')
+                elif '/' in date_str:
+                    # Format: "05/07/2025"
+                    date = datetime.strptime(date_str, '%d/%m/%Y')
                 else:
                     # Format: "5 July 2025"
                     date = datetime.strptime(date_str, '%d %B %Y')
@@ -282,11 +330,14 @@ def parse_sms(sms):
             except ValueError:
                 continue
     
-    # Enhanced balance extraction
+    # Enhanced balance extraction - try multiple patterns
     balance_patterns = [
-        r'new\s+balance[:\s]*(\d+(?:,\d{3})*)\s*rwf',      # "New balance: 179524 RWF"
-        r'balance[:\s]*(\d+(?:,\d{3})*)\s*rwf',            # "Balance: 179524 RWF"
-        r'current\s+balance[:\s]*(\d+(?:,\d{3})*)\s*rwf',  # "Current balance: 179524 RWF"
+        r'new\s+balance[:\s]*(\d+(?:,\d{3})*)\s*rwf',       # "New balance: 179524 RWF"
+        r'balance[:\s]*(\d+(?:,\d{3})*)\s*rwf',             # "Balance: 179524 RWF"
+        r'current\s+balance[:\s]*(\d+(?:,\d{3})*)\s*rwf',   # "Current balance: 179524 RWF"
+        r'your\s+balance\s+is\s+(\d+(?:,\d{3})*)\s*rwf',    # "Your balance is 179524 RWF"
+        r'balance\s+is\s+now\s+(\d+(?:,\d{3})*)\s*rwf',     # "Balance is now 179524 RWF"
+        r'remaining\s+balance[:\s]*(\d+(?:,\d{3})*)\s*rwf', # "Remaining balance: 179524 RWF"
     ]
     
     for pattern in balance_patterns:
@@ -313,14 +364,39 @@ def summarize(sms_list):
     else:
         df['date'] = pd.NaT
 
+    # Filter out records with 0 amount or 'other' type to get actual transactions
+    transaction_df = df[(df['amount'] > 0) & (df['type'] != 'other')]
+    
+    # Get latest balance from the most recent transaction (by date, then by position)
+    latest_balance = None
+    if not df['balance'].dropna().empty:
+        # Sort by date (most recent first), then by original index
+        df_with_balance = df[df['balance'].notna()].copy()
+        if not df_with_balance['date'].isnull().all():
+            df_with_balance = df_with_balance.sort_values(['date'], ascending=False, na_position='last')
+        latest_balance = float(df_with_balance['balance'].iloc[0])
+
+    # Count all messages that have any transaction-related content (not just those with amounts)
+    transaction_count = len(df)  # Count all processed messages as potential transactions
+    
+    # Count only messages with actual amounts for financial totals
+    amount_transaction_count = len(transaction_df)
+
+    # Calculate monthly breakdown for sent + payment (airtime) only
+    sent_and_payment_df = transaction_df[transaction_df['type'].isin(['sent', 'airtime'])]
+    monthly_sent_payment = {}
+    if not sent_and_payment_df.empty and not sent_and_payment_df['date'].isnull().all():
+        monthly_sent_payment = sent_and_payment_df.groupby(sent_and_payment_df['date'].dt.strftime('%B %Y'))['amount'].sum().to_dict()
+
     summary = {
-        "total_sent": float(df[df['type'] == 'sent']['amount'].sum()),
-        "total_received": float(df[df['type'] == 'received']['amount'].sum()),
-        "total_withdrawn": float(df[df['type'] == 'withdrawn']['amount'].sum()),
-        "total_airtime": float(df[df['type'] == 'airtime']['amount'].sum()),
-        "latest_balance": float(df['balance'].dropna().iloc[-1]) if not df['balance'].dropna().empty else None,
-        "transactions_count": len(df),
-        "monthly_summary": df.groupby(df['date'].dt.strftime('%B %Y'))['amount'].sum().to_dict() if not df['date'].isnull().all() else {}
+        "total_sent": float(transaction_df[transaction_df['type'] == 'sent']['amount'].sum()),
+        "total_received": float(transaction_df[transaction_df['type'] == 'received']['amount'].sum()),
+        "total_withdrawn": float(transaction_df[transaction_df['type'] == 'withdrawn']['amount'].sum()),
+        "total_airtime": float(transaction_df[transaction_df['type'] == 'airtime']['amount'].sum()),
+        "latest_balance": latest_balance,
+        "transactions_count": transaction_count,  # All messages processed
+        "amount_transactions_count": amount_transaction_count,  # Only messages with amounts
+        "monthly_summary": monthly_sent_payment  # Only sent + payment amounts
     }
 
     return summary
@@ -339,6 +415,49 @@ def test_sms_parsing(message: dict):
     return {
         "original_message": sms_text,
         "parsed_result": parsed
+    }
+
+# 🧪 Debug endpoint for SMS parsing analysis
+@app.post("/debug-sms-analysis")
+def debug_sms_analysis(data: SMSInput):
+    """Debug endpoint to analyze how SMS messages are being categorized"""
+    sms_list = data.messages
+    analysis_results = []
+    
+    for i, sms in enumerate(sms_list):
+        parsed = parse_sms(sms)
+        analysis_results.append({
+            "message_number": i + 1,
+            "original_sms": sms[:100] + "..." if len(sms) > 100 else sms,  # Truncate for readability
+            "parsed_type": parsed['type'],
+            "parsed_amount": parsed['amount'],
+            "parsed_date": parsed['date'],
+            "parsed_balance": parsed['balance']
+        })
+    
+    # Generate summary with detailed breakdown
+    summary = summarize(sms_list)
+    
+    # Count transactions by type
+    type_counts = {}
+    for result in analysis_results:
+        tx_type = result['parsed_type']
+        if tx_type not in type_counts:
+            type_counts[tx_type] = {'count': 0, 'total_amount': 0}
+        type_counts[tx_type]['count'] += 1
+        if result['parsed_amount'] > 0:
+            type_counts[tx_type]['total_amount'] += result['parsed_amount']
+    
+    return {
+        "total_messages": len(sms_list),
+        "summary": summary,
+        "type_breakdown": type_counts,
+        "detailed_analysis": analysis_results,
+        "potential_issues": {
+            "messages_without_amounts": len([r for r in analysis_results if r['parsed_amount'] == 0]),
+            "messages_categorized_as_other": len([r for r in analysis_results if r['parsed_type'] == 'other']),
+            "sent_vs_received_ratio": (summary.get('total_sent', 0) / max(summary.get('total_received', 1), 1))
+        }
     }
 
 # 🔧 Optional: testing endpoint

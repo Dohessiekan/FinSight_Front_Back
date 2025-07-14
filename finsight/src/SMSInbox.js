@@ -2,16 +2,16 @@ import React, { useState, useMemo } from 'react';
 import PageHeader from './PageHeader';
 import './SMSInbox.css';
 
-// --- MOCK DATA ---
+// --- MOCK DATA FROM MOBILE APP USERS ---
 const initialMessages = [
-  { id: 1, from: '+15551234567', customerId: 'CUST001', content: 'Your account has been locked due to suspicious activity. Please verify your identity by clicking here: http://bit.ly/suspicious-link', timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Phishing', riskScore: 95, status: 'New', priority: 'High', detectionMethod: 'Heuristics' },
-  { id: 2, from: 'MoMoPay', customerId: 'CUST002', content: 'You have received a payment of RWF 50,000 from John Doe. Your new balance is RWF 125,000.', timestamp: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), amount: 50000, type: 'Transaction', riskScore: 10, status: 'Reviewed', priority: 'Low', detectionMethod: 'Keyword Match' },
-  { id: 3, from: '+250788123456', customerId: 'CUST003', content: 'Congratulations! You have won a lottery of RWF 1,000,000. To claim your prize, please send a small processing fee of RWF 5,000 to this number.', timestamp: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(), amount: 1000000, type: 'Scam', riskScore: 85, status: 'New', priority: 'High', detectionMethod: 'Pattern Recognition' },
-  { id: 4, from: 'YourBank', customerId: 'CUST004', content: 'A new device has been registered to your account. If this was not you, please contact us immediately at 1-800-FAKE-BANK.', timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Security Alert', riskScore: 60, status: 'Notified', priority: 'Medium', detectionMethod: 'Heuristics' },
-  { id: 5, from: '+15559876543', customerId: 'CUST005', content: 'Your package is out for delivery. Track it here: https://not-a-real-tracker.com/xyz', timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Smishing', riskScore: 75, status: 'New', priority: 'Medium', detectionMethod: 'Heuristics' },
-  { id: 6, from: 'TaxOffice', customerId: 'CUST006', content: 'URGENT: Your tax refund is pending. You must update your information to receive it. Visit: fake-tax-site.com/refund', timestamp: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Scam', riskScore: 90, status: 'Escalated', priority: 'High', detectionMethod: 'Known Scammer' },
-  { id: 7, from: 'MoMoPay', customerId: 'CUST007', content: 'Payment of RWF 1,200,000 to "Online Store" was successful.', timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), amount: 1200000, type: 'Transaction', riskScore: 25, status: 'Reviewed', priority: 'Low', detectionMethod: 'Keyword Match' },
-  { id: 8, from: '+250781112233', customerId: 'CUST008', content: 'We have detected a fraudulent transaction of RWF 750,000 on your card. Please confirm if this was you. Reply YES or NO.', timestamp: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(), amount: 750000, type: 'Fraud Alert', riskScore: 80, status: 'New', priority: 'High', detectionMethod: 'Velocity Check' },
+  { id: 1, from: '+15551234567', customerId: 'mobile_user_001', content: 'Your account has been locked due to suspicious activity. Please verify your identity by clicking here: http://bit.ly/suspicious-link', timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Phishing', riskScore: 95, status: 'New', priority: 'High', detectionMethod: 'Mobile App Scan', appSource: 'FinSight Mobile' },
+  { id: 2, from: 'MoMoPay', customerId: 'mobile_user_002', content: 'You have received a payment of RWF 50,000 from John Doe. Your new balance is RWF 125,000.', timestamp: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), amount: 50000, type: 'Transaction', riskScore: 10, status: 'Reviewed', priority: 'Low', detectionMethod: 'Mobile ML Analysis', appSource: 'FinSight Mobile' },
+  { id: 3, from: '+250788123456', customerId: 'mobile_user_003', content: 'Congratulations! You have won a lottery of RWF 1,000,000. To claim your prize, please send a small processing fee of RWF 5,000 to this number.', timestamp: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(), amount: 1000000, type: 'Scam', riskScore: 85, status: 'New', priority: 'High', detectionMethod: 'User Report via App', appSource: 'FinSight Mobile' },
+  { id: 4, from: 'YourBank', customerId: 'mobile_user_004', content: 'A new device has been registered to your account. If this was not you, please contact us immediately at 1-800-FAKE-BANK.', timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Security Alert', riskScore: 60, status: 'Notified', priority: 'Medium', detectionMethod: 'Mobile App Analysis', appSource: 'FinSight Mobile' },
+  { id: 5, from: '+15559876543', customerId: 'mobile_user_005', content: 'Your package is out for delivery. Track it here: https://not-a-real-tracker.com/xyz', timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Smishing', riskScore: 75, status: 'New', priority: 'Medium', detectionMethod: 'Mobile Pattern Recognition', appSource: 'FinSight Mobile' },
+  { id: 6, from: 'TaxOffice', customerId: 'mobile_user_006', content: 'URGENT: Your tax refund is pending. You must update your information to receive it. Visit: fake-tax-site.com/refund', timestamp: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Scam', riskScore: 90, status: 'Escalated', priority: 'High', detectionMethod: 'Mobile AI Detection', appSource: 'FinSight Mobile' },
+  { id: 7, from: 'MoMoPay', customerId: 'mobile_user_007', content: 'Payment of RWF 1,200,000 to "Online Store" was successful.', timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), amount: 1200000, type: 'Transaction', riskScore: 25, status: 'Reviewed', priority: 'Low', detectionMethod: 'Mobile App Verification', appSource: 'FinSight Mobile' },
+  { id: 8, from: '+250781112233', customerId: 'mobile_user_008', content: 'We have detected a fraudulent transaction of RWF 750,000 on your card. Please confirm if this was you. Reply YES or NO.', timestamp: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(), amount: 750000, type: 'Fraud Alert', riskScore: 80, status: 'New', priority: 'High', detectionMethod: 'Mobile User Flagged', appSource: 'FinSight Mobile' },
 ];
 
 // --- HELPER FUNCTIONS ---
@@ -53,33 +53,14 @@ const getStatusColor = (status) => {
 const SMSInbox = () => {
   // --- STATE MANAGEMENT ---
   const [messages, setMessages] = useState(initialMessages);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState({ key: 'timestamp', direction: 'descending' });
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedMessages, setSelectedMessages] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState(null);
-  
-  // Filter state
-  const [dateRange, setDateRange] = useState('all');
-  const [amount, setAmount] = useState('all');
-  const [type, setType] = useState('all');
-  const [showDropdown, setShowDropdown] = useState({ date: false, amount: false, type: false });
 
   const MESSAGES_PER_PAGE = 8;
-
-  // --- HANDLERS for filters ---
-  const handleDateChange = (value) => { setDateRange(value); setShowDropdown(prev => ({ ...prev, date: false })); };
-  const handleAmountChange = (value) => { setAmount(value); setShowDropdown(prev => ({ ...prev, amount: false })); };
-  const handleTypeChange = (value) => { setType(value); setShowDropdown(prev => ({ ...prev, type: false })); };
-  const removeFilter = (filter) => {
-    if (filter === 'date') setDateRange('all');
-    if (filter === 'amount') setAmount('all');
-    if (filter === 'type') setType('all');
-  };
-  const toggleDropdown = (filter) => {
-    setShowDropdown(prev => ({ date: false, amount: false, type: false, [filter]: !prev[filter] }));
-  };
 
   // --- DERIVED STATE & MEMOIZED COMPUTATIONS ---
   const filteredMessages = useMemo(() => {
@@ -98,7 +79,7 @@ const SMSInbox = () => {
     // You would expand this with dateRange, amount, and type filters in a real app
     
     return filtered;
-  }, [messages, searchTerm, dateRange, amount, type]);
+  }, [messages, searchTerm]);
 
   const sortedMessages = useMemo(() => {
     let sortableMessages = [...filteredMessages];
@@ -195,7 +176,7 @@ const SMSInbox = () => {
   // --- RENDER ---
   return (
     <div className="admin-dashboard-container">
-      <PageHeader title="Suspicious SMS Inbox" />
+      <PageHeader title="Mobile App SMS Analysis - Admin Monitor" />
 
       {/* Summary Stats */}
       <div className="admin-stats-summary">

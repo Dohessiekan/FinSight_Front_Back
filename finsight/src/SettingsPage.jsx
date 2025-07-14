@@ -22,15 +22,16 @@ const SettingsPage = () => {
   };
   return (
     <div className="overview-container">
-      <PageHeader title="Settings" />
+      <PageHeader title="Admin Settings" />
       
       <div className="settings-content-container">
         <div className="top-right-controls">
-          <div className="container-title">General Settings</div>
+          <div className="container-title">System Administration</div>
           <div>
-            <button className="account-button">Account</button>
-            <button className="notification-button">Notification</button>
-            <button className="notification-button">Accessibility</button>
+            <button className="account-button">User Management</button>
+            <button className="notification-button">System Config</button>
+            <button className="notification-button">Security</button>
+            <button className="notification-button">API Settings</button>
           </div>
         </div>
 
@@ -45,8 +46,8 @@ const SettingsPage = () => {
                 title="Click to change photo"
               />
               <div className="profile-text">
-                <div className="profile-name">Xavier N</div>
-                <div className="profile-role">Admin</div>
+                <div className="profile-name">System Admin</div>
+                <div className="profile-role">FinSight Administrator</div>
               </div>
             </div>
             <button className="update-button" onClick={handlePhotoClick}>Update New Picture</button>
@@ -62,68 +63,69 @@ const SettingsPage = () => {
 
         <div className="basic-info-row">
           <div className="basic-info-section">
-            <div className="basic-info-label">Basic Information</div>
+            <div className="basic-info-label">Administrator Information</div>
             <div className="basic-info-description">
-              Lorem Ipsum is simply dummy text
+              Manage your administrative profile and system preferences
             </div>
           </div>
 
           <div className="more-info-section">
-            <div className="basic-info-label">More Information</div>
+            <div className="basic-info-label">System Configuration</div>
             <div className="basic-info-description">
-              Lorem Ipsum is simply dummy text
+              Configure fraud detection thresholds and system behavior
             </div>
           </div>
         </div>
 
         <div className="form-row first-row">
           <div className="form-group">
-            <label htmlFor="fullName">Full Name</label>
-            <input id="fullName" type="text" placeholder="Enter full name" />
+            <label htmlFor="fullName">Administrator Name</label>
+            <input id="fullName" type="text" placeholder="System Administrator" defaultValue="System Administrator" />
           </div>
 
           <div className="form-group">
-            <label htmlFor="email">Email Address</label>
-            <input id="email" type="email" placeholder="Enter email address" />
+            <label htmlFor="email">Admin Email</label>
+            <input id="email" type="email" placeholder="admin@finsight.rw" defaultValue="admin@finsight.rw" />
           </div>
 
           <div className="form-group">
-            <label htmlFor="phone">Phone Number</label>
-            <input id="phone" type="tel" placeholder="Enter phone number" />
+            <label htmlFor="phone">Contact Number</label>
+            <input id="phone" type="tel" placeholder="+250 788 000 000" defaultValue="+250 788 000 000" />
           </div>
 
           <div className="form-group">
-            <label htmlFor="role">Role</label>
-            <input id="role" type="text" placeholder="Enter role" />
+            <label htmlFor="role">Access Level</label>
+            <select id="role" className="role-select">
+              <option value="super_admin">Super Administrator</option>
+              <option value="admin">Administrator</option>
+              <option value="moderator">Moderator</option>
+            </select>
           </div>
         </div>
 
-        {/* Second form row with Location and Website swapped */}
+        {/* System Configuration Row */}
         <div className="form-row second-row" style={{ marginTop: '16px' }}>
           <div className="form-group">
-            <label htmlFor="biography">About Biography</label>
-            <textarea
-              id="biography"
-              name="biography"
-              placeholder="Write a short bio..."
-              rows="4"
-              className="biography-textarea"
-            ></textarea>
-          </div>
-
-          <div className="form-group">{/* Empty div for alignment */}</div>
-
-          <div className="form-group">
-            <label htmlFor="location">Location</label>
-            <input type="text" id="location" name="location" placeholder="Enter location" />
+            <label htmlFor="fraudThreshold">Fraud Detection Threshold (%)</label>
+            <input type="number" id="fraudThreshold" name="fraudThreshold" placeholder="85" defaultValue="85" min="1" max="100" />
           </div>
 
           <div className="form-group">
-            <label htmlFor="website">Website</label>
-            <input type="url" id="website" name="website" placeholder="Enter website URL" />
+            <label htmlFor="alertEmail">Alert Notifications Email</label>
+            <input type="email" id="alertEmail" name="alertEmail" placeholder="alerts@finsight.rw" defaultValue="alerts@finsight.rw" />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="maxUsers">Max Active Users</label>
+            <input type="number" id="maxUsers" name="maxUsers" placeholder="10000" defaultValue="10000" />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="apiKey">API Integration Key</label>
+            <input type="password" id="apiKey" name="apiKey" placeholder="••••••••••••••••" />
           </div>
         </div>        {/* Save Changes button */}
-        <button className="save-button">Save Changes</button>
+        <button className="save-button">Save Configuration</button>
       </div>
     </div>
   );
