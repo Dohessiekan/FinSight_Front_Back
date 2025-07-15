@@ -3,11 +3,31 @@ services:
     name: finsight-api
     env: python
     plan: free
-    buildCommand: >
-      cp FinSightApp/API/*.py . &&
-      cp FinSightApp/API/requirements.txt . &&
-      cp FinSightApp/*.pkl . &&
-      cp FinSightApp/*.keras . &&
+    buildCommand: |
+      # Copy API files to root
+      cp FinSightApp/API/*.py .
+      cp FinSightApp/API/requirements.txt .
+      
+      # List contents to debug
+      echo "Contents of FinSightApp directory:"
+      ls -la FinSightApp/
+      
+      # Copy ML model files if they exist
+      if ls FinSightApp/*.pkl 1> /dev/null 2>&1; then
+        cp FinSightApp/*.pkl .
+        echo "✅ Copied .pkl files"
+      else
+        echo "❌ No .pkl files found"
+      fi
+      
+      if ls FinSightApp/*.keras 1> /dev/null 2>&1; then
+        cp FinSightApp/*.keras .
+        echo "✅ Copied .keras files"
+      else
+        echo "❌ No .keras files found"
+      fi
+      
+      # Install Python dependencies
       pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port=$PORT
     envVars:
