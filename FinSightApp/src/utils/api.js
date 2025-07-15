@@ -1,23 +1,17 @@
 // API calls to your backend/model
-// Use environment variable or fallback based on environment
-const getApiBaseUrl = () => {
-  // Try to get from environment variables first
-  if (process.env.EXPO_PUBLIC_API_BASE_URL) {
-    return process.env.EXPO_PUBLIC_API_BASE_URL;
-  }
+// Configuration for different environments
+const API_CONFIG = {
+  // Production API (Render.com deployment) - for APK distribution
+  production: 'https://finsight-api.onrender.com',
   
-  // Fallback based on development vs production
-  if (__DEV__) {
-    return 'http://192.168.0.101:8000'; // Development - your current local IP
-  } else {
-    // Production - YOU NEED TO REPLACE THIS WITH YOUR DEPLOYED API URL
-    return 'https://your-production-api.herokuapp.com'; // Replace with actual deployed API URL
-  }
+  // Development API (local machine) - for testing
+  development: 'http://192.168.1.65:8000', // Replace with your computer's local IP
 };
 
-const API_BASE_URL = getApiBaseUrl();
+// Use production by default (for APK), set to 'development' for local testing
+const API_BASE_URL = API_CONFIG.production;
+
 console.log('🔗 API Base URL:', API_BASE_URL);
-console.log('🏗️ Environment:', __DEV__ ? 'Development' : 'Production');
 
 export async function analyzeMessages(messages) {
   try {
