@@ -369,3 +369,7 @@ This project is licensed under the MIT License. See the LICENSE file for details
 ## 📦 Download APK
 
 [👉 Download Latest APK](https://github.com/Dohessiekan/FinSight_Front_Back/releases/latest/download/app-release.apk)
+
+# Video Link
+
+https://youtu.be/5sw7XxZTTF0
