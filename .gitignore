@@ -75,21 +75,23 @@ finsight_py310/
 finsight_env/
 
 # ML Model Files (Large files - ignore to avoid git issues)
-*.pkl
-*.h5
-*.model
-*.joblib
-*.bin
-*.pt
-*.pth
-*.keras
+# Note: Commented out to allow deployment to Render.com
+# *.pkl
+# *.h5
+# *.model
+# *.joblib
+# *.bin
+# *.pt
+# *.pth
+# *.keras
 
-# Specifically ignore your model files
-tokenizer.pkl
-label_encoder.pkl
-max_len.pkl
-spam_classifier.h5
-model_sentiment.keras
+# Specifically ignore your model files  
+# Note: Commented out to allow deployment to Render.com
+# tokenizer.pkl
+# label_encoder.pkl
+# max_len.pkl
+# spam_classifier.h5
+# model_sentiment.keras
 
 # TensorFlow and Python binary files
 *_pywrap_tensorflow_internal.pyd
