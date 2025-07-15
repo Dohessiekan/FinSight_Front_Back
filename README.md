@@ -364,3 +364,12 @@ This project is licensed under the MIT License. See the LICENSE file for details
 ---
 
 **Note**: This is a development setup guide. For production deployment, additional security measures, environment configurations, and deployment strategies should be implemented.
+
+
+## 📦 Download APK
+
+[👉 Download Latest APK](https://github.com/Dohessiekan/FinSight_Front_Back/releases/latest/download/app-release.apk)
+
+# Video Link
+
+https://youtu.be/5sw7XxZTTF0
