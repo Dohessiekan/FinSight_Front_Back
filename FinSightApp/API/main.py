@@ -36,17 +36,17 @@ try:
         except RuntimeError as e:
             print(f"GPU setup warning: {e}")
     
-    with open('tokenizer.pkl', 'rb') as f:
+    with open('../tokenizer.pkl', 'rb') as f:
         tokenizer = pickle.load(f)
 
-    with open('label_encoder.pkl', 'rb') as f:
+    with open('../label_encoder.pkl', 'rb') as f:
         label_encoder = pickle.load(f)
 
-    with open('max_len.pkl', 'rb') as f:
+    with open('../max_len.pkl', 'rb') as f:
         max_len = pickle.load(f)
 
     try:
-        model = load_model('model_sentiment.keras', compile=False)
+        model = load_model('../model_sentiment.keras', compile=False)
         print("✅ Spam detection model loaded successfully!")
         print(f"📊 Model input shape: {model.input_shape}")
         print(f"📊 Model output shape: {model.output_shape}")
