@@ -70,7 +70,7 @@ from typing import Union, Optional
 from pydantic import BaseModel, validator
 
 class FlexibleTextIn(BaseModel):
-    # Support both single text and multiple messages
+    # Support both single text and multiple messages (now allow both)
     text: Optional[str] = None
     messages: Optional[List[str]] = None
     
@@ -79,8 +79,7 @@ class FlexibleTextIn(BaseModel):
         text = values.get('text')
         if not text and not v:
             raise ValueError('Either text or messages must be provided')
-        if text and v:
-            raise ValueError('Provide either text or messages, not both')
+        # Now allow both fields
         return v
 
 class PredictionOut(BaseModel):
@@ -94,24 +93,16 @@ class BatchPredictionOut(BaseModel):
 @app.post("/predict-spam")
 def predict_spam(payload: FlexibleTextIn):
     # Determine if this is a single message or batch
+    # Accept both text and messages, merge if both are provided
+    messages_to_process = []
     if payload.text is not None:
-        # Single message
-        messages_to_process = [payload.text]
-        return_single = True
-    elif payload.messages is not None:
-        # Batch of messages
-        messages_to_process = payload.messages
-        return_single = False
-    else:
-        # No valid input
-        return PredictionOut(
-            label="error",
-            confidence=0.0,
-            probabilities={"error": 1.0}
-        )
-    
+        messages_to_process.append(payload.text)
+    if payload.messages is not None:
+        messages_to_process.extend(payload.messages)
+    return_single = len(messages_to_process) == 1
+
     results = []
-    
+
     for message in messages_to_process:
         # Check if model is loaded
         if not all([tokenizer, label_encoder, max_len, model]):
