@@ -358,32 +358,152 @@ export default function DashboardScreen({ navigation }) {
     setApiLoading(true);
     setApiError(null);
     try {
-      // Import SMS Service and dedicated analysis function
+      const currentDate = new Date();
+      const currentMonthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+      
+      console.log(`🔍 Starting current month SMS summary for ${currentMonthName}...`);
+      
+      // Import SMS Service
       const SMSService = (await import('../services/SMSService')).default;
-      const { analyzeCurrentMonthSMS } = await import('../utils/api');
       
-      console.log('Starting real SMS analysis...');
-      
-      // Use the dedicated analysis function
-      const result = await analyzeCurrentMonthSMS(SMSService);
-      
-      if (result.success) {
-        setApiSummary(result.data);
-        console.log(`Analysis complete: ${result.transactionCount} transactions from ${result.messageCount} SMS messages`);
-        
-        // Update fraud score based on API response
-        if (result.data.suspicious_transactions > 0) {
-          setFraudScore(Math.min(50 + (result.data.suspicious_transactions * 10), 95));
-        } else {
-          setFraudScore(Math.max(5, 15 - (result.data.transactions_count || 0)));
+      // Check permissions
+      const hasPermissions = await SMSService.checkSMSPermissions();
+      if (!hasPermissions) {
+        const granted = await SMSService.requestSMSPermissions();
+        if (!granted) {
+          throw new Error('SMS permissions required to analyze transactions');
         }
+      }
+
+      // Get all SMS messages
+      const allMessages = await SMSService.getAllSMS({ maxCount: 1000 });
+      console.log(`📱 Retrieved ${allMessages.length} total SMS messages`);
+      
+      // Filter to ONLY current month (same logic as MessagesScreen)
+      const currentMonth = currentDate.getMonth();
+      const currentYear = currentDate.getFullYear();
+      
+      const currentMonthMessages = allMessages.filter(message => {
+        const messageDate = new Date(parseInt(message.date));
+        return messageDate.getMonth() === currentMonth && 
+               messageDate.getFullYear() === currentYear;
+      });
+      
+      console.log(`📅 Found ${currentMonthMessages.length} SMS messages from ${currentMonthName}`);
+      
+      if (currentMonthMessages.length === 0) {
+        setApiError(`No SMS messages found for ${currentMonthName}`);
+        setApiSummary({
+          transactions_count: 0,
+          total_sent: 0,
+          total_received: 0,
+          total_withdrawn: 0,
+          total_airtime: 0,
+          latest_balance: 0,
+          monthly_summary: {},
+          message: `No messages from ${currentMonthName}`
+        });
+        return;
+      }
+      
+      // Enhanced transaction filtering (same as MessagesScreen scan button)
+      const transactionKeywords = [
+        // Transaction types
+        'sent', 'received', 'withdrawn', 'bought airtime', 'buy airtime', 
+        'payment', 'paid', 'deposit', 'credited', 'debited', 'transfer',
+        'transaction', 'purchase', 'completed',
+        
+        // Currency and amounts
+        'rwf', 'frw', 'amount', 'balance', 'new balance', 'fee',
+        
+        // Mobile money terms
+        'momo', 'mobile money', 'data bundle', 'airtime',
+        
+        // Transaction references
+        'ref:', 'transaction id', 'external transaction id', 'financial transaction id',
+        
+        // Service providers
+        'mtn', 'airtel', 'tigo', 'bank', 'equity', 'cogebanque', 'ecobank',
+        
+        // MTN specific patterns
+        "y'ello", 'momo account', 'successfully completed',
+        
+        // Transaction indicators
+        '164*s*', 'message from debit', 'message from credit'
+      ];
+      
+      const transactionMessages = currentMonthMessages.filter(m => {
+        const text = m.body || m.text || '';
+        if (!text) return false;
+        
+        const textLower = text.toLowerCase();
+        
+        // Check for keywords
+        const hasKeywords = transactionKeywords.some(keyword => 
+          textLower.includes(keyword.toLowerCase())
+        );
+        
+        // Check for amount patterns (numbers followed by RWF)
+        const hasAmountPattern = /\d+(?:,\d{3})*\s*rwf/i.test(text) ||
+                                /rwf\s*\d+(?:,\d{3})*/i.test(text);
+        
+        // Check for balance patterns
+        const hasBalancePattern = /balance.*?\d+.*?rwf/i.test(text) ||
+                                 /new balance.*?\d+/i.test(text);
+        
+        // Check for transaction ID patterns
+        const hasTransactionId = /transaction id.*?\d+/i.test(text) ||
+                                /ref.*?[a-z0-9]+/i.test(text);
+        
+        return hasKeywords || hasAmountPattern || hasBalancePattern || hasTransactionId;
+      });
+      
+      console.log(`💰 Found ${transactionMessages.length} transaction messages from ${currentMonthName}`);
+      
+      if (transactionMessages.length === 0) {
+        setApiError(`No financial transaction messages found for ${currentMonthName}`);
+        setApiSummary({
+          transactions_count: currentMonthMessages.length,
+          amount_transactions_count: 0,
+          total_sent: 0,
+          total_received: 0,
+          total_withdrawn: 0,
+          total_airtime: 0,
+          latest_balance: 0,
+          monthly_summary: {},
+          message: `Found ${currentMonthMessages.length} SMS messages but none appear to be transaction-related for ${currentMonthName}`
+        });
+        return;
+      }
+
+      // Extract message texts for API analysis
+      const messageTexts = transactionMessages.map(msg => msg.body || msg.text || '');
+      
+      // Send to API for financial analysis (using getSmsSummary from api.js)
+      const summary = await getSmsSummary(messageTexts);
+      
+      console.log(`📊 Analysis complete: ${transactionMessages.length} transactions from ${currentMonthMessages.length} SMS messages in ${currentMonthName}`);
+      
+      // Enhance summary with month information
+      const enhancedSummary = {
+        ...summary,
+        analysis_month: currentMonthName,
+        total_messages: currentMonthMessages.length,
+        transaction_messages: transactionMessages.length,
+        analysis_timestamp: new Date().toLocaleString()
+      };
+      
+      setApiSummary(enhancedSummary);
+      
+      // Update fraud score based on API response
+      if (summary.suspicious_transactions > 0) {
+        setFraudScore(Math.min(50 + (summary.suspicious_transactions * 10), 95));
       } else {
-        setApiError(result.error);
-        setApiSummary(result.data);
+        setFraudScore(Math.max(5, 15 - (summary.transactions_count || 0)));
       }
       
     } catch (error) {
-      console.error('Error in fetchRealSummary:', error);
+      console.error('❌ Error in fetchRealSummary:', error);
       setApiError(`Failed to analyze SMS: ${error.message}`);
       
       // Fallback summary
@@ -535,7 +655,17 @@ export default function DashboardScreen({ navigation }) {
         {/* Financial Summary Card */}
         <Card style={styles.summaryCard} variant="elevated">
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Financial Summary</Text>
+            <Text style={styles.sectionTitle}>
+              {apiSummary && apiSummary.analysis_month 
+                ? `Financial Summary - ${apiSummary.analysis_month}`
+                : 'Financial Summary'
+              }
+            </Text>
+            {apiSummary && apiSummary.analysis_timestamp && (
+              <Text style={styles.timestampText}>
+                Last updated: {apiSummary.analysis_timestamp}
+              </Text>
+            )}
           </View>
           
           <View style={styles.summaryGrid}>
@@ -591,11 +721,24 @@ export default function DashboardScreen({ navigation }) {
                     <Text style={styles.summaryLabel}>Payment</Text>
                   </View>
                 )}
+                
+                {/* Analysis Info */}
+                {(apiSummary.total_messages || apiSummary.transaction_messages) && (
+                  <View style={styles.analysisInfo}>
+                    <Text style={styles.analysisInfoText}>
+                      📊 Analyzed {apiSummary.transaction_messages || apiSummary.transactions_count} transaction messages 
+                      {apiSummary.total_messages && ` from ${apiSummary.total_messages} total SMS messages`}
+                      {apiSummary.analysis_month && ` in ${apiSummary.analysis_month}`}
+                    </Text>
+                  </View>
+                )}
               </>
             ) : (
               <View style={styles.placeholderContainer}>
                 <MaterialIcons name="analytics" size={48} color={colors.textSecondary} />
-                <Text style={styles.placeholderText}>Click "Get Real Summary" to analyze your SMS transactions</Text>
+                <Text style={styles.placeholderText}>
+                  Click "Get Real Summary" to analyze your current month ({new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}) SMS transactions
+                </Text>
               </View>
             )}
           </View>
@@ -608,7 +751,7 @@ export default function DashboardScreen({ navigation }) {
             >
               <MaterialIcons name="refresh" size={20} color={colors.white} />
               <Text style={styles.fetchButtonText}>
-                {apiLoading ? 'Analyzing SMS...' : 'Get Real Summary'}
+                {apiLoading ? `Analyzing ${new Date().toLocaleString('default', { month: 'long' })}...` : 'Get Real Summary'}
               </Text>
             </TouchableOpacity>
           )}
@@ -908,6 +1051,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
   },
+  timestampText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+    marginTop: 2,
+  },
+  analysisInfo: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: colors.background,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  analysisInfoText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 16,
+  },
   refreshText: {
     fontSize: 14,
     color: colors.primary,
@@ -1069,6 +1232,26 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: colors.text,
+  },
+  timestampText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+    marginTop: 2,
+  },
+  analysisInfo: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: colors.background,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  analysisInfoText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 16,
   },
   seeAllText: {
     fontSize: 14,

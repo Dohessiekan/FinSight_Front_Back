@@ -29,54 +29,153 @@ if (Platform.OS === 'android') {
   }
 }
 
+// Utility function to extract financial information from SMS messages
+const extractFinancialInfo = (messageText) => {
+  if (!messageText) return {};
+  
+  const info = {};
+  
+  // Extract amount (various patterns)
+  const amountPatterns = [
+    /transaction of (\d+(?:,\d{3})*)\s*rwf/i,
+    /amount.*?(\d+(?:,\d{3})*)\s*rwf/i,
+    /rwf\s*(\d+(?:,\d{3})*)/i,
+    /(\d+(?:,\d{3})*)\s*rwf/i
+  ];
+  
+  for (const pattern of amountPatterns) {
+    const match = messageText.match(pattern);
+    if (match) {
+      info.amount = `RWF ${match[1].replace(',', '')}`;
+      break;
+    }
+  }
+  
+  // Extract balance
+  const balancePatterns = [
+    /new balance.*?(\d+(?:,\d{3})*)\s*rwf/i,
+    /balance.*?(\d+(?:,\d{3})*)\s*rwf/i,
+    /your balance.*?(\d+(?:,\d{3})*)\s*rwf/i
+  ];
+  
+  for (const pattern of balancePatterns) {
+    const match = messageText.match(pattern);
+    if (match) {
+      info.balance = `RWF ${match[1]}`;
+      break;
+    }
+  }
+  
+  // Extract transaction type
+  if (messageText.toLowerCase().includes('data bundle')) {
+    info.type = 'data_purchase';
+  } else if (messageText.toLowerCase().includes('airtime')) {
+    info.type = 'airtime_purchase';
+  } else if (messageText.toLowerCase().includes('sent') || messageText.toLowerCase().includes('transfer')) {
+    info.type = 'sent';
+  } else if (messageText.toLowerCase().includes('received')) {
+    info.type = 'received';
+  } else if (messageText.toLowerCase().includes('withdrawn')) {
+    info.type = 'withdrawal';
+  } else {
+    info.type = 'transaction';
+  }
+  
+  // Extract transaction ID
+  const transactionIdPatterns = [
+    /financial transaction id.*?(\d+)/i,
+    /external transaction id.*?(\d+)/i,
+    /transaction id.*?(\d+)/i,
+    /ref.*?([a-z0-9]+)/i
+  ];
+  
+  for (const pattern of transactionIdPatterns) {
+    const match = messageText.match(pattern);
+    if (match) {
+      info.transactionId = match[1];
+      break;
+    }
+  }
+  
+  // Extract date
+  const datePattern = /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/;
+  const dateMatch = messageText.match(datePattern);
+  if (dateMatch) {
+    info.date = dateMatch[1];
+    info.parsedDate = new Date(dateMatch[1]);
+  }
+  
+  return info;
+};
+
 // Mock API service (replace with actual SMS scanning implementation)
 const scanSmsMessages = async () => {
   if (Platform.OS !== 'android' || !SmsAndroid) {
-    // fallback to mock for non-android or dev
-    return new Promise(resolve => setTimeout(() => resolve([
-      { 
-        id: '1', 
-        text: 'Received RWF 50,000 from John Doe. Ref: TXN123456', 
-        status: 'safe', 
-        timestamp: '2 hours ago',
-        amount: 'RWF 50,000',
-        type: 'received',
-        sender: 'MTN Mobile',
-        analysis: 'Verified transaction from known contact'
-      },
-      { 
-        id: '2', 
-        text: 'URGENT: Your account will be suspended. Click here to verify: scam.link', 
-        status: 'fraud', 
-        timestamp: '1 hour ago',
-        amount: '',
-        type: 'alert',
-        sender: 'Unknown',
-        analysis: 'Phishing attempt - contains suspicious link'
-      },
-      { 
-        id: '3', 
-        text: 'Sent RWF 120,000 to Amazon. Ref: TXN789012', 
-        status: 'safe', 
-        timestamp: 'Yesterday',
-        amount: 'RWF 120,000',
-        type: 'sent',
-        sender: 'Bank of Kigali',
-        analysis: 'Recipient verified through official channels'
-      },
-      { 
-        id: '4', 
-        text: 'You won RWF 5,000,000! Claim your prize: prize.fake', 
-        status: 'suspicious', 
-        timestamp: 'May 15',
-        amount: '',
-        type: 'alert',
-        sender: 'Contest',
-        analysis: 'Unverified lottery notification - high fraud probability'
-      },
-    ]), 1500));
+    // fallback to mock for non-android or dev - ONLY current month data
+    const currentDate = new Date();
+    const currentMonth = currentDate.getMonth();
+    const currentYear = currentDate.getFullYear();
+    
+    // Create dates within current month ONLY
+    const day1 = new Date(currentYear, currentMonth, 1); // First day of current month
+    const day5 = new Date(currentYear, currentMonth, 5);
+    const day10 = new Date(currentYear, currentMonth, 10);
+    const day12 = new Date(currentYear, currentMonth, 12);
+    const day14 = new Date(currentYear, currentMonth, 14);
+    
+    return new Promise(resolve => setTimeout(() => {
+      const mockMessages = [
+        { 
+          id: '1', 
+          text: "*164*S*Y'ello, A transaction of 500 RWF by Data Bundle MTN on your MOMO account was successfully completed at 2025-07-10 07:51:49. Message from debit receiver: . Your new balance:287564 RWF. Fee was 0 RWF. Financial Transaction Id: 21621649217.*EN#", 
+          date: day10.getTime().toString(),
+          sender: 'MTN Mobile'
+        },
+        { 
+          id: '2', 
+          text: 'Received RWF 50,000 from John Doe on 2025-07-14 15:30:25. Ref: TXN123456. Your new balance: 337564 RWF.', 
+          date: day14.getTime().toString(),
+          sender: 'MTN Mobile'
+        },
+        { 
+          id: '3', 
+          text: 'Sent RWF 120,000 to Amazon on 2025-07-12 10:15:30. Ref: TXN789012. Your new balance: 217564 RWF.', 
+          date: day12.getTime().toString(),
+          sender: 'Bank of Kigali'
+        },
+        { 
+          id: '4', 
+          text: 'Airtime purchase of RWF 5,000 completed successfully on 2025-07-05 16:45:12. Your new balance: 282564 RWF.', 
+          date: day5.getTime().toString(),
+          sender: 'MTN Rwanda'
+        },
+        { 
+          id: '5', 
+          text: 'Transfer RWF 25,000 to savings account completed on 2025-07-01 09:30:00. New balance: 312564 RWF.', 
+          date: day1.getTime().toString(),
+          sender: 'Bank of Kigali'
+        }
+      ];
+      
+      // Enhance mock messages with extracted financial info
+      const enhancedMessages = mockMessages.map(msg => {
+        const financialInfo = extractFinancialInfo(msg.text);
+        return {
+          ...msg,
+          amount: financialInfo.amount || '',
+          type: financialInfo.type || 'transaction',
+          balance: financialInfo.balance || '',
+          transactionId: financialInfo.transactionId || '',
+          timestamp: new Date(parseInt(msg.date)).toLocaleDateString()
+        };
+      });
+      
+      console.log(`📱 Mock data: ${enhancedMessages.length} messages from current month only`);
+      resolve(enhancedMessages);
+    }, 1500));
   }
-  // Request permission
+  
+  // For real Android SMS reading
   const granted = await PermissionsAndroid.request(
     PermissionsAndroid.PERMISSIONS.READ_SMS,
     {
@@ -90,23 +189,42 @@ const scanSmsMessages = async () => {
   if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
     throw new Error('SMS permission denied');
   }
-  // Read SMS
+  
+  // Read SMS and filter for current month only
   return new Promise((resolve, reject) => {
+    const currentDate = new Date();
+    const currentMonth = currentDate.getMonth();
+    const currentYear = currentDate.getFullYear();
+    const firstDayOfMonth = new Date(currentYear, currentMonth, 1).getTime();
+    const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999).getTime();
+    
+    console.log(`📅 Filtering SMS for current month: ${currentDate.toLocaleString('default', { month: 'long', year: 'numeric' })}`);
+    console.log(`📅 Date range: ${new Date(firstDayOfMonth).toLocaleDateString()} - ${new Date(lastDayOfMonth).toLocaleDateString()}`);
+    
     SmsAndroid.list(
-      JSON.stringify({ box: 'inbox' }),
+      JSON.stringify({ 
+        box: 'inbox',
+        minDate: firstDayOfMonth,
+        maxDate: lastDayOfMonth
+      }),
       fail => reject(fail),
       (count, smsList) => {
-        const messages = JSON.parse(smsList).map((msg, idx) => ({
+        const allMessages = JSON.parse(smsList);
+        console.log(`📨 Retrieved ${allMessages.length} SMS messages from current month`);
+        
+        const currentMonthMessages = allMessages.filter(msg => {
+          const msgDate = new Date(parseInt(msg.date));
+          return msgDate.getMonth() === currentMonth && msgDate.getFullYear() === currentYear;
+        }).map((msg, idx) => ({
           id: String(msg._id || idx),
           text: msg.body,
-          status: 'safe', // TODO: Call your model API to analyze
-          timestamp: new Date(msg.date).toLocaleString(),
-          amount: '',
-          type: 'received',
+          date: msg.date,
+          timestamp: new Date(parseInt(msg.date)).toLocaleString(),
           sender: msg.address,
-          analysis: 'Not analyzed',
         }));
-        resolve(messages);
+        
+        console.log(`✅ Filtered to ${currentMonthMessages.length} messages from current month`);
+        resolve(currentMonthMessages);
       }
     );
   });
@@ -293,29 +411,83 @@ export default function MessagesScreen() {
 
     setLoading(true);
     try {
-      console.log('📱 Starting SMS scan and analysis...');
+      const currentDate = new Date();
+      const currentMonthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
       
-      // Step 1: Get real messages from device
-      const scannedMessages = await scanSmsMessages();
-      console.log(`📨 Found ${scannedMessages.length} messages`);
+      console.log(`� Starting current month SMS scan for ${currentMonthName}...`);
       
-      // Step 2: Filter for transaction messages
+      // Step 1: Get ONLY current month messages from device
+      const currentMonthMessages = await scanSmsMessages();
+      console.log(`📅 Found ${currentMonthMessages.length} SMS messages from ${currentMonthName}`);
+      
+      if (currentMonthMessages.length === 0) {
+        Alert.alert(
+          'No Current Month Messages', 
+          `No SMS messages found for ${currentMonthName}. Make sure you have SMS messages in the current month.`
+        );
+        setScanComplete(true);
+        setLoading(false);
+        return;
+      }
+      
+      // Step 2: Filter for transaction messages (already current month)
       const transactionKeywords = [
+        // Transaction types
         'sent', 'received', 'withdrawn', 'bought airtime', 'buy airtime', 
         'payment', 'paid', 'deposit', 'credited', 'debited', 'transfer',
-        'rwf', 'frw', 'amount', 'balance', 'transaction', 'ref:', 'mtn', 'airtel'
+        'transaction', 'purchase', 'completed',
+        
+        // Currency and amounts
+        'rwf', 'frw', 'amount', 'balance', 'new balance', 'fee',
+        
+        // Mobile money terms
+        'momo', 'mobile money', 'data bundle', 'airtime',
+        
+        // Transaction references
+        'ref:', 'transaction id', 'external transaction id', 'financial transaction id',
+        
+        // Service providers
+        'mtn', 'airtel', 'tigo', 'bank', 'equity', 'cogebanque', 'ecobank',
+        
+        // MTN specific patterns
+        "y'ello", 'momo account', 'successfully completed',
+        
+        // Transaction indicators
+        '164*s*', 'message from debit', 'message from credit'
       ];
       
-      const transactionMessages = scannedMessages.filter(m =>
-        transactionKeywords.some(keyword => 
-          m.text && m.text.toLowerCase().includes(keyword.toLowerCase())
-        )
-      );
+      const transactionMessages = currentMonthMessages.filter(m => {
+        if (!m.text) return false;
+        
+        const textLower = m.text.toLowerCase();
+        
+        // Check for keywords
+        const hasKeywords = transactionKeywords.some(keyword => 
+          textLower.includes(keyword.toLowerCase())
+        );
+        
+        // Check for amount patterns (numbers followed by RWF)
+        const hasAmountPattern = /\d+(?:,\d{3})*\s*rwf/i.test(m.text) ||
+                                /rwf\s*\d+(?:,\d{3})*/i.test(m.text);
+        
+        // Check for balance patterns
+        const hasBalancePattern = /balance.*?\d+.*?rwf/i.test(m.text) ||
+                                 /new balance.*?\d+/i.test(m.text);
+        
+        // Check for transaction ID patterns
+        const hasTransactionId = /transaction id.*?\d+/i.test(m.text) ||
+                                /ref.*?[a-z0-9]+/i.test(m.text);
+        
+        return hasKeywords || hasAmountPattern || hasBalancePattern || hasTransactionId;
+      });
       
-      console.log(`💰 Found ${transactionMessages.length} transaction-related messages`);
+      console.log(`💰 Found ${transactionMessages.length} transaction messages from ${currentMonthName}`);
       
       if (transactionMessages.length === 0) {
-        Alert.alert('No Transaction Messages', 'No transaction-related messages found to analyze.');
+        Alert.alert(
+          'No Transaction Messages', 
+          `No financial transaction messages found for ${currentMonthName}. The scan analyzes only transaction-related SMS.`
+        );
         setScanComplete(true);
         setLoading(false);
         return;
@@ -364,6 +536,9 @@ export default function MessagesScreen() {
             analysis = '❓ Analysis failed - no result data';
           }
           
+          // Extract financial information from the message
+          const financialInfo = extractFinancialInfo(message.text);
+          
           return {
             ...message,
             status,
@@ -373,6 +548,12 @@ export default function MessagesScreen() {
               label: resultData?.label || 'unknown',
               probabilities: resultData?.probabilities || { unknown: 1.0 }
             },
+            // Enhanced with extracted financial info
+            amount: financialInfo.amount || message.amount || '',
+            type: financialInfo.type || message.type || 'transaction',
+            balance: financialInfo.balance || '',
+            transactionId: financialInfo.transactionId || '',
+            extractedDate: financialInfo.date || '',
             timestamp: message.timestamp || new Date().toLocaleString(),
             processed: true
           };
@@ -391,8 +572,8 @@ export default function MessagesScreen() {
         console.log(`📊 Analysis Summary: ${safeCount} safe, ${suspiciousCount} suspicious, ${spamCount} fraud`);
         
         Alert.alert(
-          'Scan Complete', 
-          `Analyzed ${analyzedMessages.length} messages:\n• ${safeCount} safe\n• ${suspiciousCount} suspicious\n• ${spamCount} fraud/spam`,
+          'Current Month Analysis Complete', 
+          `✅ Analyzed ${analyzedMessages.length} transaction messages from ${currentMonthName}:\n\n• ${safeCount} Safe transactions\n• ${suspiciousCount} Suspicious messages\n• ${spamCount} Fraud/spam detected`,
           [{ text: 'OK' }]
         );
         
@@ -413,7 +594,7 @@ export default function MessagesScreen() {
         
         Alert.alert(
           'Analysis Failed', 
-          'Could not analyze messages due to API error. Messages displayed for manual review.',
+          `❌ Could not analyze ${currentMonthName} transaction messages due to API error.\n\n${transactionMessages.length} messages displayed for manual review.`,
           [{ text: 'OK' }]
         );
       }
@@ -543,18 +724,24 @@ export default function MessagesScreen() {
         <View style={styles.headerLeft}>
           <Text style={styles.greeting}>Messages</Text>
           <Text style={styles.subtitle}>SMS fraud detection & monitoring</Text>
+          <Text style={styles.currentMonthInfo}>
+            Scan analyzes current month: {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
+          </Text>
         </View>
-        <TouchableOpacity 
-          style={styles.scanButton}
-          onPress={handleScanPress}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color={colors.white} size="small" />
-          ) : (
-            <Ionicons name="scan" size={20} color={colors.white} />
-          )}
-        </TouchableOpacity>
+        <View style={styles.scanButtonContainer}>
+          <TouchableOpacity 
+            style={styles.scanButton}
+            onPress={handleScanPress}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Ionicons name="scan" size={20} color={colors.white} />
+            )}
+          </TouchableOpacity>
+          <Text style={styles.scanButtonLabel}>Scan Month</Text>
+        </View>
       </View>
       
       {/* Offline Indicator */}
@@ -591,7 +778,9 @@ export default function MessagesScreen() {
       {scanComplete && (
         <View style={styles.scanStatus}>
           <Ionicons name="checkmark-circle" size={20} color={colors.success} />
-          <Text style={styles.scanStatusText}>Last scan: {new Date().toLocaleTimeString()}</Text>
+          <Text style={styles.scanStatusText}>
+            Current month scan completed: {new Date().toLocaleTimeString()}
+          </Text>
         </View>
       )}
       
@@ -696,14 +885,28 @@ export default function MessagesScreen() {
               <Ionicons name="shield-checkmark" size={60} color={colors.primaryLight} />
             </View>
             <Text style={styles.emptyTitle}>
-              {scanComplete ? 'No messages match filter' : 'Ready to scan SMS'}
-            </Text>
-            <Text style={styles.emptyText}>
-              {scanComplete 
-                ? 'Try changing your filter settings' 
-                : 'Scan your messages to detect fraud attempts'
+              {loading 
+                ? 'Scanning Current Month Messages' 
+                : scanComplete 
+                  ? 'No messages match filter' 
+                  : 'Ready to scan SMS'
               }
             </Text>
+            <Text style={styles.emptyText}>
+              {loading 
+                ? `Analyzing messages from ${new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}...`
+                : scanComplete 
+                  ? 'Try changing your filter settings' 
+                  : 'Scan your messages to detect fraud attempts'
+              }
+            </Text>
+            {loading && (
+              <ActivityIndicator 
+                size="large" 
+                color={colors.primary} 
+                style={{ marginTop: 16 }} 
+              />
+            )}
           </View>
         }
       />
@@ -762,6 +965,16 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: 4,
   },
+  currentMonthInfo: {
+    fontSize: 12,
+    color: colors.primary,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  scanButtonContainer: {
+    alignItems: 'center',
+    gap: 4,
+  },
   scanButton: {
     backgroundColor: colors.primary,
     width: 44,
@@ -774,6 +987,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 5,
+  },
+  scanButtonLabel: {
+    fontSize: 10,
+    color: colors.primary,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   statsContainer: {
     flexDirection: 'row',
