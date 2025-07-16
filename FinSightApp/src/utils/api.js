@@ -2,7 +2,7 @@
 // Configuration for different environments
 const API_CONFIG = {
   // Production API (Render.com deployment) - for APK distribution
-  production: 'https://finsight-api.onrender.com',
+  production: 'https://finsight-front-back-2.onrender.com',
   
   // Development API (local machine) - for testing
   development: 'http://192.168.1.65:8000', // Replace with your computer's local IP
