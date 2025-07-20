@@ -1,0 +1,310 @@
+/**
+ * Real-time Alert System for Mobile App Fraud Detection
+ * 
+ * Automatically creates fraud alerts when suspicious/fraud messages 
+ * are detected during mobile app scans
+ */
+
+import { collection, addDoc, serverTimestamp, doc, updateDoc, increment } from 'firebase/firestore';
+import { db } from '../config/firebase';
+
+export class MobileAlertSystem {
+  
+  /**
+   * Create a fraud alert when a suspicious/fraud message is detected
+   */
+  static async createFraudAlert(message, userId, analysisResult) {
+    try {
+      console.log(`🚨 Creating fraud alert for message from ${message.sender}`);
+      
+      // Only create alerts for suspicious or fraud messages
+      if (!message.status || (message.status !== 'suspicious' && message.status !== 'fraud')) {
+        console.log(`ℹ️ Skipping alert for safe message (status: ${message.status})`);
+        return { success: true, skipped: true, reason: 'safe_message' };
+      }
+      
+      // Create the fraud alert document
+      const alertData = {
+        // Basic alert info
+        type: message.status === 'fraud' ? 'Fraud Detected' : 'Suspicious Activity',
+        severity: this.calculateSeverity(message, analysisResult),
+        status: 'active',
+        
+        // Message details
+        messageId: message.id,
+        messageText: (message.text || '').substring(0, 200), // First 200 chars
+        sender: message.sender || message.address || 'Unknown',
+        phone: message.phone || message.sender || 'Unknown',
+        
+        // Analysis details
+        confidence: analysisResult?.confidence || message.spamData?.confidence || 0,
+        aiAnalysis: message.analysis || 'Mobile app fraud detection',
+        riskScore: this.calculateRiskScore(message, analysisResult),
+        fraudType: analysisResult?.label || message.spamData?.label || message.status,
+        
+        // User and source info
+        userId: userId,
+        source: 'FinSight Mobile App',
+        location: message.location || 'Mobile Device',
+        
+        // Timestamps
+        detectedAt: serverTimestamp(),
+        messageTimestamp: message.timestamp || message.date || new Date().toISOString(),
+        createdAt: serverTimestamp(),
+        
+        // Additional metadata
+        deviceType: 'mobile',
+        platform: 'react-native',
+        appVersion: '2.0',
+        
+        // Alert management
+        acknowledged: false,
+        investigatedBy: null,
+        resolution: null,
+        notes: '',
+        
+        // Financial info if available
+        amount: message.amount || null,
+        currency: 'RWF',
+        transactionId: message.transactionId || null,
+        
+        // For dashboard display
+        message: this.generateAlertMessage(message, analysisResult),
+        priority: this.calculatePriority(message, analysisResult)
+      };
+      
+      // Save to fraudAlerts collection
+      const alertsRef = collection(db, 'fraudAlerts');
+      const alertDoc = await addDoc(alertsRef, alertData);
+      
+      console.log(`✅ Fraud alert created with ID: ${alertDoc.id}`);
+      
+      // Update dashboard stats
+      await this.updateDashboardStats(alertData);
+      
+      return {
+        success: true,
+        alertId: alertDoc.id,
+        alertType: alertData.type,
+        severity: alertData.severity
+      };
+      
+    } catch (error) {
+      console.error('❌ Failed to create fraud alert:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  
+  /**
+   * Calculate alert severity based on message analysis
+   */
+  static calculateSeverity(message, analysisResult) {
+    const confidence = analysisResult?.confidence || message.spamData?.confidence || 0;
+    const riskScore = message.riskScore || (confidence * 100);
+    
+    if (message.status === 'fraud' && confidence > 0.9) return 'critical';
+    if (message.status === 'fraud' && confidence > 0.7) return 'high';
+    if (message.status === 'suspicious' || riskScore > 60) return 'warning';
+    return 'info';
+  }
+  
+  /**
+   * Calculate risk score for the alert
+   */
+  static calculateRiskScore(message, analysisResult) {
+    const confidence = analysisResult?.confidence || message.spamData?.confidence || 0;
+    const baseScore = confidence * 100;
+    
+    // Boost score for certain keywords
+    const text = (message.text || '').toLowerCase();
+    let boost = 0;
+    
+    if (text.includes('urgent') || text.includes('immediately')) boost += 10;
+    if (text.includes('click') || text.includes('link')) boost += 15;
+    if (text.includes('verify') || text.includes('confirm')) boost += 10;
+    if (text.includes('account') && text.includes('suspend')) boost += 20;
+    
+    return Math.min(100, Math.round(baseScore + boost));
+  }
+  
+  /**
+   * Calculate alert priority
+   */
+  static calculatePriority(message, analysisResult) {
+    const confidence = analysisResult?.confidence || message.spamData?.confidence || 0;
+    
+    if (message.status === 'fraud' && confidence > 0.8) return 'high';
+    if (message.status === 'fraud' || confidence > 0.6) return 'medium';
+    return 'low';
+  }
+  
+  /**
+   * Generate human-readable alert message
+   */
+  static generateAlertMessage(message, analysisResult) {
+    const sender = message.sender || 'Unknown';
+    const confidence = Math.round((analysisResult?.confidence || message.spamData?.confidence || 0) * 100);
+    const type = message.status === 'fraud' ? 'fraudulent' : 'suspicious';
+    
+    return `${type.charAt(0).toUpperCase() + type.slice(1)} SMS detected from ${sender} with ${confidence}% confidence. Message: "${(message.text || '').substring(0, 100)}${message.text?.length > 100 ? '...' : ''}"`;
+  }
+  
+  /**
+   * Update dashboard statistics when alert is created
+   */
+  static async updateDashboardStats(alertData) {
+    try {
+      const dashboardRef = doc(db, 'dashboard', 'stats');
+      const today = new Date().toISOString().split('T')[0];
+      
+      const updateData = {
+        // Overall stats
+        totalFraudDetected: increment(1),
+        activeFraudAlerts: increment(1),
+        lastAlertTime: serverTimestamp(),
+        
+        // Daily stats
+        [`daily_${today}.fraudAlerts`]: increment(1),
+        [`daily_${today}.alertsCreated`]: increment(1),
+        
+        // Severity-based stats
+        [`alertsBySeverity.${alertData.severity}`]: increment(1),
+        
+        // Last update
+        lastUpdated: serverTimestamp(),
+        lastSync: serverTimestamp()
+      };
+      
+      // Add priority-based increments
+      if (alertData.priority === 'high') {
+        updateData.highPriorityAlerts = increment(1);
+      }
+      
+      await updateDoc(dashboardRef, updateData);
+      console.log(`📊 Dashboard stats updated for new ${alertData.severity} alert`);
+      
+    } catch (error) {
+      console.error('❌ Failed to update dashboard stats:', error);
+    }
+  }
+  
+  /**
+   * Process a batch of analyzed messages and create alerts for fraud/suspicious ones
+   */
+  static async processScanResults(analyzedMessages, userId) {
+    try {
+      console.log(`🔍 Processing ${analyzedMessages.length} analyzed messages for alerts`);
+      
+      const alerts = [];
+      let alertsCreated = 0;
+      let alertsSkipped = 0;
+      
+      for (const message of analyzedMessages) {
+        try {
+          const result = await this.createFraudAlert(message, userId, message.analysisResult);
+          
+          if (result.success && !result.skipped) {
+            alerts.push(result);
+            alertsCreated++;
+          } else if (result.skipped) {
+            alertsSkipped++;
+          }
+          
+        } catch (error) {
+          console.error(`❌ Failed to create alert for message ${message.id}:`, error);
+        }
+      }
+      
+      console.log(`✅ Alert processing complete: ${alertsCreated} alerts created, ${alertsSkipped} skipped`);
+      
+      return {
+        success: true,
+        alertsCreated,
+        alertsSkipped,
+        alerts
+      };
+      
+    } catch (error) {
+      console.error('❌ Failed to process scan results for alerts:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  
+  /**
+   * Create a summary alert for a scan session
+   */
+  static async createScanSummaryAlert(scanSummary, userId) {
+    try {
+      // Only create summary if there were significant findings
+      if (scanSummary.fraudCount === 0 && scanSummary.suspiciousCount === 0) {
+        return { success: true, skipped: true, reason: 'no_threats_found' };
+      }
+      
+      const alertData = {
+        type: 'Scan Summary',
+        severity: scanSummary.fraudCount > 0 ? 'high' : 'warning',
+        status: 'active',
+        
+        messageText: `Scan completed: ${scanSummary.totalAnalyzed} messages analyzed`,
+        sender: 'FinSight Security System',
+        phone: 'System',
+        
+        confidence: 100,
+        aiAnalysis: `Mobile scan detected ${scanSummary.fraudCount} fraud and ${scanSummary.suspiciousCount} suspicious messages`,
+        riskScore: scanSummary.fraudCount > 0 ? 90 : 60,
+        fraudType: 'scan_summary',
+        
+        userId: userId,
+        source: 'FinSight Mobile App - Scan Summary',
+        location: 'Mobile Device',
+        
+        detectedAt: serverTimestamp(),
+        messageTimestamp: new Date().toISOString(),
+        createdAt: serverTimestamp(),
+        
+        // Scan-specific data
+        scanData: {
+          totalAnalyzed: scanSummary.totalAnalyzed,
+          fraudCount: scanSummary.fraudCount,
+          suspiciousCount: scanSummary.suspiciousCount,
+          safeCount: scanSummary.safeCount,
+          scanDuration: scanSummary.duration || 'Unknown'
+        },
+        
+        deviceType: 'mobile',
+        platform: 'react-native',
+        appVersion: '2.0',
+        
+        acknowledged: false,
+        message: `Mobile scan alert: ${scanSummary.fraudCount + scanSummary.suspiciousCount} potential threats detected out of ${scanSummary.totalAnalyzed} messages analyzed`,
+        priority: scanSummary.fraudCount > 0 ? 'high' : 'medium'
+      };
+      
+      const alertsRef = collection(db, 'fraudAlerts');
+      const alertDoc = await addDoc(alertsRef, alertData);
+      
+      console.log(`✅ Scan summary alert created: ${alertDoc.id}`);
+      
+      return {
+        success: true,
+        alertId: alertDoc.id,
+        type: 'scan_summary'
+      };
+      
+    } catch (error) {
+      console.error('❌ Failed to create scan summary alert:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+}
+
+export default MobileAlertSystem;

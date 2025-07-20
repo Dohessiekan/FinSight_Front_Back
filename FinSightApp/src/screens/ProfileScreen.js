@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import FirebaseService from '../services/FirebaseService';
 import Button from '../components/Button';
+import ScreenWrapper from '../components/ScreenWrapper';
 
 export default function ProfileScreen({ navigation }) {
   const { user, signOut } = useAuth();
@@ -215,26 +216,27 @@ export default function ProfileScreen({ navigation }) {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       
-      {/* Standardized Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <Text style={styles.greeting}>Profile</Text>
-          <Text style={styles.subtitle}>Manage your account settings</Text>
+      <ScreenWrapper>
+        {/* Standardized Header */}
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <Text style={styles.greeting}>Profile</Text>
+            <Text style={styles.subtitle}>Manage your account settings</Text>
+          </View>
+          <TouchableOpacity 
+            style={[
+              styles.editButton,
+              isEditing && styles.saveButton
+            ]}
+            onPress={isEditing ? handleSave : handleEditToggle}
+          >
+            <Ionicons 
+              name={isEditing ? "checkmark" : "settings"} 
+              size={20} 
+              color={colors.white} 
+            />
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity 
-          style={[
-            styles.editButton,
-            isEditing && styles.saveButton
-          ]}
-          onPress={isEditing ? handleSave : handleEditToggle}
-        >
-          <Ionicons 
-            name={isEditing ? "checkmark" : "settings"} 
-            size={20} 
-            color={colors.white} 
-          />
-        </TouchableOpacity>
-      </View>
 
       <KeyboardAvoidingView
         style={styles.flex}
@@ -436,6 +438,7 @@ export default function ProfileScreen({ navigation }) {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      </ScreenWrapper>
     </SafeAreaView>
   );
 }
@@ -444,6 +447,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0, // Add status bar padding for Android
   },
   flex: {
     flex: 1,

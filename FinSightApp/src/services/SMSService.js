@@ -60,16 +60,17 @@ class SMSService {
   }
 
   /**
-   * Retrieve all SMS messages
+   * Retrieve all SMS messages with improved defaults
    */
   async getAllSMS(options = {}) {
     if (!await this.checkSMSPermissions()) {
       throw new Error('SMS permissions not granted');
     }
 
+    // Increased default maxCount to get more messages
     const defaultOptions = {
       box: 'inbox', // 'inbox', 'sent', 'draft', 'outbox', 'failed', 'queued'
-      maxCount: 100,
+      maxCount: 2000, // Increased from 100 to 2000 to get more messages
       ...options
     };
 
@@ -83,7 +84,7 @@ class SMSService {
         (count, smsList) => {
           try {
             const messages = JSON.parse(smsList);
-            console.log(`Retrieved ${count} SMS messages`);
+            console.log(`Retrieved ${count} SMS messages (max requested: ${defaultOptions.maxCount})`);
             resolve(messages);
           } catch (error) {
             console.error('Error parsing SMS list:', error);

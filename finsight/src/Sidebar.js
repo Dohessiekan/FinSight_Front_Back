@@ -1,15 +1,37 @@
 import React from 'react';
 import './Sidebar.css';
-import { NavLink } from 'react-router-dom'; // Import NavLink
+import { NavLink } from 'react-router-dom';
+import { signOutAdmin } from './utils/auth';
 
 // Use logoX.svg from the public folder
 const logo = process.env.PUBLIC_URL + '/logoX.svg';
-const homeIcon = process.env.PUBLIC_URL + '/home.svg'; // Assuming home.svg is the icon for Overview
+const homeIcon = process.env.PUBLIC_URL + '/home.svg';
 const smsIcon = process.env.PUBLIC_URL + '/sms.svg';
 const statsIcon = process.env.PUBLIC_URL + '/stats.svg';
 const settingsIcon = process.env.PUBLIC_URL + '/settings.svg';
 
 const Sidebar = ({ onLogout, adminInfo }) => {
+  
+  const handleLogout = async () => {
+    try {
+      console.log('🔐 Signing out admin user...');
+      const result = await signOutAdmin();
+      
+      if (result.success) {
+        console.log('✅ Firebase sign out successful');
+        onLogout(); // Call parent logout handler
+      } else {
+        console.error('❌ Sign out failed:', result.error);
+        // Still call logout to clear local session
+        onLogout();
+      }
+    } catch (error) {
+      console.error('❌ Logout error:', error);
+      // Still call logout to clear local session
+      onLogout();
+    }
+  };
+
   return (
     <div className="sidebar">
       <div className="sidebar-logo-container">
@@ -22,6 +44,7 @@ const Sidebar = ({ onLogout, adminInfo }) => {
           <li><NavLink to="/sms-inbox" className={({ isActive }) => isActive ? "active" : ''}><img src={smsIcon} alt="SMS Analysis" className="nav-icon" />SMS Analysis</NavLink></li>
           <li><NavLink to="/financial-summary" className={({ isActive }) => isActive ? "active" : ''}><img src={statsIcon} alt="Analytics" className="nav-icon" />Analytics</NavLink></li>
           <li><NavLink to="/settings" className={({ isActive }) => isActive ? "active" : ''}><img src={settingsIcon} alt="Settings" className="nav-icon" />Admin Settings</NavLink></li>
+          <li><NavLink to="/sms-analysis-test" className={({ isActive }) => isActive ? "active" : ''}><img src={process.env.PUBLIC_URL + '/settings.svg'} alt="Test" className="nav-icon" />SMS Test</NavLink></li>
         </ul>
       </nav>
       
@@ -45,7 +68,7 @@ const Sidebar = ({ onLogout, adminInfo }) => {
 
         {/* Logout Button */}
         <button 
-          onClick={onLogout}
+          onClick={handleLogout}
           style={{
             background: '#dc3545',
             color: 'white',

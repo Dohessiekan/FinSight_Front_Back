@@ -1,6 +1,42 @@
-# Getting Started with Create React App
+# FinSight Admin Dashboard
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+## 🔥 Firebase Authentication Required
+
+The admin dashboard now uses **Firebase Authentication** for secure access. 
+
+### 📋 Setup Required:
+
+1. **Create Admin Accounts** in Firebase Authentication:
+   - `admin@finsight.rw` (Admin role)
+   - `superadmin@finsight.rw` (Super Admin role)  
+   - `moderator@finsight.rw` (Moderator role)
+
+2. **See Setup Guide**: Check `../ADMIN_FIREBASE_SETUP.md` for detailed instructions
+
+### 🚀 Getting Started:
+
+```bash
+npm install
+npm start
+```
+
+### 🔐 Login Process:
+
+1. Navigate to the web dashboard
+2. Use one of the Firebase admin accounts to login
+3. Dashboard will display real-time data from mobile app users
+
+### ✅ Features:
+
+- **Real-time user count** from mobile app
+- **SMS analysis and fraud detection**
+- **Role-based admin permissions**
+- **Secure Firebase authentication**
+- **Session management with auto-logout**
+
+---
+
+**Important**: Admin accounts must be created in Firebase Authentication before you can access the dashboard.
 
 ## Available Scripts
 

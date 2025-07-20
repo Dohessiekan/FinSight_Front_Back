@@ -3,22 +3,12 @@ services:
     name: finsight-api
     env: python
     plan: free
-    buildCommand: |
-      # Recreate local directory structure
-      mkdir -p API
-      mkdir -p FinSightApp
-      # Copy API files to API/
-      cp FinSightApp/API/*.py API/
-      cp FinSightApp/API/requirements.txt API/
-      # Copy ML model files to FinSightApp/
-      cp FinSightApp/*.pkl FinSightApp/
-      cp FinSightApp/*.keras FinSightApp/
-      # Install Python dependencies
-      pip install -r API/requirements.txt
-    startCommand: uvicorn API.main:app --host 0.0.0.0 --port=$PORT
+    workingDir: FinSightApp/API
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port=$PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10.11
+        value: python-3.11.4
       - key: CORS_ORIGINS
         value: "*"
     healthCheckPath: /docs

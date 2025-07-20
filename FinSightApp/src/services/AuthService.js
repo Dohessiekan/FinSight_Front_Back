@@ -1,7 +1,7 @@
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
-  signOut,
+  signOut as firebaseSignOut,
   sendPasswordResetEmail,
   updateProfile,
   GoogleAuthProvider,
@@ -24,27 +24,59 @@ class AuthService {
   // Sign up with email and password
   async signUpWithEmail(email, password, displayName) {
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      console.log('🔐 Starting Firebase signup...');
+      
+      // Add timeout to signup process
+      const signupPromise = createUserWithEmailAndPassword(auth, email, password);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Signup timeout - please check your internet connection')), 30000)
+      );
+      
+      const userCredential = await Promise.race([signupPromise, timeoutPromise]);
+      console.log('✅ Firebase signup successful');
       
       // Update the user's display name
       if (displayName) {
-        await updateProfile(userCredential.user, {
-          displayName: displayName
-        });
+        try {
+          await updateProfile(userCredential.user, {
+            displayName: displayName
+          });
+          console.log('✅ Display name updated');
+        } catch (profileError) {
+          console.warn('Profile update failed (non-critical):', profileError);
+          // Don't fail the entire signup for profile update issues
+        }
       }
       
       return { success: true, user: userCredential.user };
     } catch (error) {
-      return { success: false, error: error.message };
+      console.error('❌ Signup error:', error);
+      
+      // Provide more specific error messages
+      let errorMessage = error.message;
+      if (error.code === 'auth/email-already-in-use') {
+        errorMessage = 'This email is already registered. Please sign in instead.';
+      } else if (error.code === 'auth/weak-password') {
+        errorMessage = 'Password is too weak. Please use at least 6 characters.';
+      } else if (error.code === 'auth/invalid-email') {
+        errorMessage = 'Please enter a valid email address.';
+      } else if (error.message.includes('timeout')) {
+        errorMessage = 'Connection timeout. Please check your internet and try again.';
+      }
+      
+      return { success: false, error: errorMessage };
     }
   }
 
   // Sign out
   async signOut() {
     try {
-      await signOut(auth);
+      console.log('🔐 Signing out user from Firebase...');
+      await firebaseSignOut(auth);
+      console.log('✅ Firebase sign out successful');
       return { success: true };
     } catch (error) {
+      console.error('❌ Firebase sign out failed:', error);
       return { success: false, error: error.message };
     }
   }

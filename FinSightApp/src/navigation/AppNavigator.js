@@ -13,13 +13,17 @@ import DashboardScreen from '../screens/DashboardScreen';
 import MessagesScreen from '../screens/MessagesScreen';
 import AdviceScreen from '../screens/AdviceScreen';
 import ProfileScreen from '../screens/ProfileScreen';
-import SMSInboxScreen from '../screens/SMSInboxScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabs() {
   const insets = useSafeAreaInsets();
+  const isAndroid = Platform.OS === 'android';
+  
+  // Calculate proper bottom spacing for Android navigation bar
+  const androidBottomSpacing = isAndroid ? Math.max(insets.bottom, 16) : insets.bottom;
+  const tabBarHeight = 60; // Fixed height for the tab bar content
   
   return (
     <Tab.Navigator
@@ -30,8 +34,8 @@ function MainTabs() {
         tabBarStyle: { 
           backgroundColor: colors.surface,
           borderTopWidth: 0,
-          height: 50 + insets.bottom,
-          paddingBottom: insets.bottom,
+          height: tabBarHeight + androidBottomSpacing,
+          paddingBottom: androidBottomSpacing,
           paddingTop: 8,
           paddingHorizontal: 16,
           shadowColor: '#000',
@@ -40,13 +44,21 @@ function MainTabs() {
           shadowRadius: 16,
           elevation: 12,
           position: 'absolute',
-          borderTopLeftRadius: 24,
-          borderTopRightRadius: 24,
+          borderTopLeftRadius: 20,
+          borderTopRightRadius: 20,
+          // Add margin from screen edges on Android
+          ...(isAndroid && {
+            marginHorizontal: 12,
+            marginBottom: Math.max(androidBottomSpacing - 8, 8),
+            borderRadius: 20,
+          }),
         },
         tabBarItemStyle: {
-          paddingVertical: 0,
-          borderRadius: 16,
-          marginHorizontal: 4,
+          paddingVertical: 4,
+          borderRadius: 12,
+          marginHorizontal: 2,
+          height: 48,
+          justifyContent: 'center',
         },
         tabBarLabelStyle: {
           fontSize: 11,
@@ -76,8 +88,6 @@ function MainTabs() {
             );
           } else if (route.name === 'Profile') {
             iconName = focused ? 'person-circle' : 'person-circle-outline';
-          } else if (route.name === 'SMSInbox') {
-            iconName = focused ? 'mail' : 'mail-outline';
           }
           
           return iconName ? (
@@ -120,24 +130,6 @@ function MainTabs() {
         component={ProfileScreen}
         options={{
           tabBarLabel: 'Profile',
-        }}
-      />
-      <Tab.Screen 
-        name="SMSInbox" 
-        component={SMSInboxScreen} 
-        options={{
-          tabBarLabel: 'SMS Inbox',
-          tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons 
-              name={focused ? 'mail' : 'mail-outline'} 
-              size={focused ? 28 : 24} 
-              color={focused ? colors.primary : colors.textSecondary}
-              style={{ 
-                opacity: focused ? 1 : 0.6,
-                transform: [{ scale: focused ? 1.15 : 1 }]
-              }}
-            />
-          ),
         }}
       />
     </Tab.Navigator>

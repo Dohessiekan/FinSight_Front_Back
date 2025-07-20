@@ -2,22 +2,32 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, PermissionsAndroid, Platform, TextInput, Keyboard, SafeAreaView, StatusBar, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Card from '../components/Card';
+import ScreenWrapper from '../components/ScreenWrapper';
 import colors from '../theme/colors';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { analyzeMessages, analyzeMessagesComprehensive, detectSpamBatch, scanMessages } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../config/firebase';
+import DashboardStatsManager from '../utils/dashboardStats';
+import SimpleIncrementalScanner from '../utils/SimpleIncrementalScanner';
+import GlobalDuplicateDetector from '../utils/GlobalDuplicateDetector';
+import MobileAlertSystem from '../utils/MobileAlertSystem';
+import SecurityScoreManager from '../utils/SecurityScoreManager';
+import UserDataManager from '../utils/UserDataManager';
 import { 
   collection, 
   doc, 
   addDoc, 
   updateDoc, 
+  getDoc,
   query, 
   where, 
   orderBy, 
   limit, 
   onSnapshot,
-  serverTimestamp
+  serverTimestamp,
+  getDocs,
+  increment
 } from 'firebase/firestore';
 
 let SmsAndroid;
@@ -269,25 +279,112 @@ export default function MessagesScreen() {
     }
   };
 
-  // Firebase functions for message management
+  // Enhanced Firebase functions for message management with global duplicate detection
   const saveMessageToFirebase = async (message) => {
-    if (!user) return;
+    if (!user) {
+      console.error('❌ Cannot save message: User not authenticated');
+      return { success: false, error: 'User not authenticated' };
+    }
     
     try {
-      const messagesRef = collection(db, 'users', user.uid, 'messages');
-      await addDoc(messagesRef, {
-        ...message,
-        userId: user.uid,
-        createdAt: serverTimestamp(),
-        processed: true
-      });
+      console.log(`💾 Attempting to save message for user: ${user.uid}`);
+      console.log(`📝 Message text preview: ${message.text?.substring(0, 50)}...`);
       
-      // Update cache after successful save
-      const updatedMessages = [message, ...messages];
-      await saveToCache(MESSAGES_CACHE_KEY, updatedMessages);
+      // Original user-level save function
+      const saveToUserCollection = async (msg) => {
+        const messagesRef = collection(db, 'users', user.uid, 'messages');
+        
+        // Check if message already exists in user's collection
+        const existingQuery = query(
+          messagesRef, 
+          where('text', '==', msg.text),
+          where('sender', '==', msg.sender || 'Unknown')
+        );
+        const existingSnapshot = await getDocs(existingQuery);
+        
+        if (!existingSnapshot.empty) {
+          console.log(`⚠️ Message already exists in user's collection, skipping: ${msg.id}`);
+          return { exists: true, id: existingSnapshot.docs[0].id, success: true };
+        }
+        
+        // Enhanced message object with all required fields
+        const enhancedMessage = {
+          ...msg,
+          userId: user.uid,
+          createdAt: serverTimestamp(),
+          processed: true,
+          monthYear: new Date().toISOString().substring(0, 7),
+          savedAt: new Date().toISOString(),
+          source: 'mobile_app',
+          version: '2.0'
+        };
+        
+        // Add new message
+        const docRef = await addDoc(messagesRef, enhancedMessage);
+        console.log(`✅ Successfully saved message to Firebase with ID: ${docRef.id}`);
+        
+        return { success: true, id: docRef.id, exists: false };
+      };
+      
+      // Use global duplicate detection
+      const result = await GlobalDuplicateDetector.saveMessageWithGlobalCheck(
+        message, 
+        user.uid, 
+        saveToUserCollection
+      );
+      
+      if (result.skipped) {
+        console.log(`🌍 Global duplicate detected - message skipped for user ${user.uid}`);
+        console.log(`👤 Original user: ${result.originalUser}`);
+        return result;
+      }
+      
+      // Update dashboard stats with comprehensive tracking
+      try {
+        const dashboardRef = doc(db, 'dashboard', 'stats');
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+        
+        // Prepare the update data
+        const updateData = {
+          totalMessagesAnalyzed: increment(1),
+          smsAnalyzedToday: increment(1),
+          totalSmsAnalyzedToday: increment(1), // Match the field name in your dashboard
+          smsCount: increment(1), // New field to track SMS count
+          lastUpdated: serverTimestamp(),
+          lastSync: serverTimestamp()
+        };
+        
+        // Add daily tracking
+        updateData[`daily_${today}.smsCount`] = increment(1);
+        updateData[`daily_${today}.date`] = today;
+        
+        // Track fraud/suspicious messages
+        if (enhancedMessage.status === 'fraud') {
+          updateData.activeFraudAlerts = increment(1);
+          updateData.fraudsPrevented = increment(1);
+          updateData[`daily_${today}.fraudCount`] = increment(1);
+        } else if (enhancedMessage.status === 'suspicious') {
+          updateData[`daily_${today}.suspiciousCount`] = increment(1);
+        } else if (enhancedMessage.status === 'safe') {
+          updateData[`daily_${today}.safeCount`] = increment(1);
+        }
+        
+        await updateDoc(dashboardRef, updateData);
+        console.log('📈 Dashboard stats updated comprehensively:', updateData);
+      } catch (dashboardError) {
+        console.warn('⚠️ Failed to update dashboard stats:', dashboardError.message);
+        console.warn('⚠️ Dashboard error details:', dashboardError);
+      }
+      
+      return { exists: false, id: docRef.id, success: true };
       
     } catch (error) {
-      console.error('Error saving message:', error);
+      console.error('❌ Critical error saving message to Firebase:', error);
+      console.error('🔍 Error details:', {
+        code: error.code,
+        message: error.message,
+        stack: error.stack
+      });
       
       if (isFirebaseOfflineError(error)) {
         setIsOffline(true);
@@ -297,6 +394,7 @@ export default function MessagesScreen() {
         setMessages(updatedMessages);
         await saveToCache(MESSAGES_CACHE_KEY, updatedMessages);
       }
+      throw error;
     }
   };
 
@@ -333,6 +431,83 @@ export default function MessagesScreen() {
     }
   };
 
+  // Function to get existing messages from Firebase for current month
+  const getExistingCurrentMonthMessages = async () => {
+    if (!user) return [];
+    
+    try {
+      const messagesRef = collection(db, 'users', user.uid, 'messages');
+      const currentMonthYear = new Date().toISOString().substring(0, 7); // "2025-07"
+      
+      console.log(`🔍 Fetching existing messages for ${currentMonthYear}...`);
+      
+      // TEMPORARY FIX: Use simple query without orderBy to avoid index requirement
+      const q = query(
+        messagesRef,
+        where('monthYear', '==', currentMonthYear)
+        // Removed orderBy to avoid composite index requirement
+      );
+      
+      const snapshot = await getDocs(q);
+      let existingMessages = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      // Sort manually by timestamp after fetching
+      existingMessages.sort((a, b) => {
+        const dateA = a.createdAt?.toDate?.() || new Date(a.timestamp || a.savedAt || 0);
+        const dateB = b.createdAt?.toDate?.() || new Date(b.timestamp || b.savedAt || 0);
+        return dateB - dateA; // Descending order (newest first)
+      });
+      
+      console.log(`📋 Found ${existingMessages.length} existing messages for current month in Firebase`);
+      return existingMessages;
+      
+    } catch (error) {
+      console.error('❌ Error fetching existing messages:', error);
+      
+      // Fallback: Try to get all messages and filter manually
+      try {
+        console.log('🔄 Trying fallback query for existing messages...');
+        const simpleSnapshot = await getDocs(collection(db, 'users', user.uid, 'messages'));
+        const allMessages = simpleSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        const currentMonthYear = new Date().toISOString().substring(0, 7);
+        const currentMonthMessages = allMessages.filter(msg => msg.monthYear === currentMonthYear);
+        
+        // Sort manually
+        currentMonthMessages.sort((a, b) => {
+          const dateA = a.createdAt?.toDate?.() || new Date(a.timestamp || a.savedAt || 0);
+          const dateB = b.createdAt?.toDate?.() || new Date(b.timestamp || b.savedAt || 0);
+          return dateB - dateA;
+        });
+        
+        console.log(`✅ Fallback successful: ${currentMonthMessages.length} existing messages`);
+        return currentMonthMessages;
+        
+      } catch (fallbackError) {
+        console.error('❌ Fallback query also failed:', fallbackError);
+        return [];
+      }
+    }
+  };
+
+  // Function to filter out already analyzed messages
+  const filterUnanalyzedMessages = (newMessages, existingMessages) => {
+    const existingSet = new Set(
+      existingMessages.map(msg => `${msg.text}-${msg.sender || 'Unknown'}`)
+    );
+    
+    const unanalyzed = newMessages.filter(msg => {
+      const key = `${msg.text}-${msg.sender || 'Unknown'}`;
+      return !existingSet.has(key);
+    });
+    
+    console.log(`🔍 Found ${unanalyzed.length} new messages to analyze (${newMessages.length - unanalyzed.length} already exist)`);
+    return unanalyzed;
+  };
+
   const loadMessagesFromFirebase = async () => {
     if (!user) return;
     
@@ -344,7 +519,15 @@ export default function MessagesScreen() {
     
     try {
       const messagesRef = collection(db, 'users', user.uid, 'messages');
-      const q = query(messagesRef, orderBy('createdAt', 'desc'), limit(100));
+      const currentMonthYear = new Date().toISOString().substring(0, 7); // "2025-07"
+      
+      // Query for current month messages only
+      const q = query(
+        messagesRef, 
+        where('monthYear', '==', currentMonthYear),
+        orderBy('createdAt', 'desc'), 
+        limit(500)
+      );
       
       const unsubscribe = onSnapshot(q, async (snapshot) => {
         const firebaseMessages = snapshot.docs.map(doc => ({
@@ -352,6 +535,7 @@ export default function MessagesScreen() {
           ...doc.data()
         }));
         
+        console.log(`📱 Loaded ${firebaseMessages.length} current month messages from Firebase`);
         setMessages(firebaseMessages);
         setIsOffline(false);
         
@@ -379,18 +563,28 @@ export default function MessagesScreen() {
   };
 
   useEffect(() => {
-    // Disabled Firebase listener - showing results directly in UI
-    // if (user) {
-    //   let unsubscribe;
-    //   
-    //   const setupMessagesListener = async () => {
-    //     unsubscribe = await loadMessagesFromFirebase();
-    //   };
-    //   
-    //   setupMessagesListener();
-    //   
-    //   return () => unsubscribe && unsubscribe();
-    // }
+    // Initialize dashboard stats and enable Firebase listener to load existing messages
+    if (user) {
+      let unsubscribe;
+      
+      const setupMessagesListener = async () => {
+        try {
+          // Initialize dashboard stats when user loads
+          await DashboardStatsManager.initializeDashboardStats();
+          await DashboardStatsManager.updateUserCount(user.uid);
+          console.log('📊 Dashboard initialized for user:', user.uid);
+        } catch (error) {
+          console.warn('⚠️ Dashboard initialization failed:', error);
+        }
+        
+        // Setup message listener
+        unsubscribe = await loadMessagesFromFirebase();
+      };
+      
+      setupMessagesListener();
+      
+      return () => unsubscribe && unsubscribe();
+    }
   }, [user]);
   
   // Calculate statistics
@@ -414,23 +608,43 @@ export default function MessagesScreen() {
       const currentDate = new Date();
       const currentMonthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
       
-      console.log(`� Starting current month SMS scan for ${currentMonthName}...`);
+      console.log(`🔍 Starting incremental SMS scan for ${currentMonthName}...`);
       
-      // Step 1: Get ONLY current month messages from device
-      const currentMonthMessages = await scanSmsMessages();
-      console.log(`📅 Found ${currentMonthMessages.length} SMS messages from ${currentMonthName}`);
+      // Step 1: Get existing messages from Firebase for current month
+      const existingMessages = await getExistingCurrentMonthMessages();
       
-      if (currentMonthMessages.length === 0) {
-        Alert.alert(
-          'No Current Month Messages', 
-          `No SMS messages found for ${currentMonthName}. Make sure you have SMS messages in the current month.`
-        );
-        setScanComplete(true);
+      // Step 2: Get ALL messages from device and filter for new ones only
+      const allMessages = await scanSmsMessages();
+      console.log(`� Found ${allMessages.length} total SMS messages on device`);
+      
+      // Use incremental scanning to get only new messages since last scan
+      let scanResult;
+      try {
+        scanResult = await SimpleIncrementalScanner.filterNewMessages(user.uid, allMessages || []);
+      } catch (scanError) {
+        console.error('❌ Incremental scan failed:', scanError);
+        Alert.alert('Scan Error', 'Failed to perform incremental scan. Please try again.');
         setLoading(false);
         return;
       }
       
-      // Step 2: Filter for transaction messages (already current month)
+      const newMessages = (scanResult && scanResult.messagesToAnalyze) ? scanResult.messagesToAnalyze : [];
+      console.log(`🆕 ${scanResult ? scanResult.summary : 'Scan failed'}`);
+      
+      if (newMessages.length === 0) {
+        // Show existing messages from Firebase
+        setMessages(existingMessages);
+        setScanComplete(true);
+        setLoading(false);
+        
+        Alert.alert(
+          'No New Messages', 
+          `No new SMS messages found since last scan.\n\nShowing ${existingMessages.length} existing analyzed messages.`
+        );
+        return;
+      }
+      
+      // Step 3: Filter new messages for transaction messages
       const transactionKeywords = [
         // Transaction types
         'sent', 'received', 'withdrawn', 'bought airtime', 'buy airtime', 
@@ -456,7 +670,7 @@ export default function MessagesScreen() {
         '164*s*', 'message from debit', 'message from credit'
       ];
       
-      const transactionMessages = currentMonthMessages.filter(m => {
+      const transactionMessages = newMessages.filter(m => {
         if (!m.text) return false;
         
         const textLower = m.text.toLowerCase();
@@ -481,29 +695,44 @@ export default function MessagesScreen() {
         return hasKeywords || hasAmountPattern || hasBalancePattern || hasTransactionId;
       });
       
-      console.log(`💰 Found ${transactionMessages.length} transaction messages from ${currentMonthName}`);
+      console.log(`💰 Found ${transactionMessages.length} new transaction messages to analyze`);
       
-      if (transactionMessages.length === 0) {
-        Alert.alert(
-          'No Transaction Messages', 
-          `No financial transaction messages found for ${currentMonthName}. The scan analyzes only transaction-related SMS.`
-        );
+      // Step 4: Since these are truly new messages, we can skip filtering against existing
+      // (the incremental scanner already ensures we only get new messages)
+      const newTransactionMessages = transactionMessages;
+      
+      if (newTransactionMessages.length === 0) {
+        // Show existing messages from Firebase
+        setMessages(existingMessages);
+        
+        // Mark scan as complete even when no new transaction messages found
+        await SimpleIncrementalScanner.completeScan(user.uid, 0);
+        console.log('✅ Incremental scan completed - no new transaction messages');
+        
         setScanComplete(true);
         setLoading(false);
+        
+        Alert.alert(
+          'No New Transaction Messages', 
+          `Found ${newMessages.length} new messages, but none are transaction-related.\n\nShowing ${existingMessages.length} existing analyzed messages.`,
+          [{ text: 'OK' }]
+        );
         return;
       }
       
-      // Step 3: Extract message texts and send to predict-spam endpoint
-      const messageTexts = transactionMessages.map(m => m.text).filter(text => text && text.trim());
-      console.log('🔍 Sending messages to spam detection API...');
+      console.log(`🔍 Analyzing ${newTransactionMessages.length} new messages...`);
+      
+      // Step 5: Extract message texts and send to predict-spam endpoint
+      const messageTexts = newTransactionMessages.map(m => m.text).filter(text => text && text.trim());
+      console.log('🔍 Sending new messages to spam detection API...');
       
       try {
-        // Send all messages to predict-spam endpoint
+        // Send new messages to predict-spam endpoint
         const spamAnalysisResult = await scanMessages(messageTexts);
         console.log('🛡️ Spam analysis result:', spamAnalysisResult);
         
-        // Step 4: Process results and update message status
-        const analyzedMessages = transactionMessages.map((message, index) => {
+        // Step 6: Process results and update message status
+        const analyzedNewMessages = newTransactionMessages.map((message, index) => {
           let status = 'safe';
           let analysis = '✅ Message appears legitimate';
           let confidence = 0;
@@ -559,29 +788,168 @@ export default function MessagesScreen() {
           };
         });
         
-        // Step 5: Display analyzed messages directly in UI (no Firebase save)
-        console.log('� Displaying analyzed messages in UI...');
-        setMessages(analyzedMessages);
+        // Step 7: Save new analyzed messages to Firebase
+        console.log('💾 Saving new analyzed messages to Firebase...');
+        let savedCount = 0;
+        let errorCount = 0;
+        
+        for (const message of analyzedNewMessages) {
+          try {
+            const result = await saveMessageToFirebase(message);
+            if (!result.exists) {
+              savedCount++;
+              console.log(`✅ Saved new message ${message.id} to Firebase`);
+            }
+          } catch (error) {
+            errorCount++;
+            console.error(`❌ Failed to save message ${message.id}:`, error);
+          }
+        }
+        
+        // Step 8: Calculate statistics for the analyzed messages
+        const newSafeCount = analyzedNewMessages.filter(m => m.status === 'safe').length;
+        const newSuspiciousCount = analyzedNewMessages.filter(m => m.status === 'suspicious').length;
+        const newSpamCount = analyzedNewMessages.filter(m => m.status === 'fraud').length;
+        
+        // Step 9: Update comprehensive dashboard stats for the scan session
+        try {
+          await DashboardStatsManager.updateSmsStats(
+            savedCount,      // total messages
+            newSpamCount,    // fraud count
+            newSuspiciousCount, // suspicious count
+            newSafeCount     // safe count
+          );
+          console.log(`📈 Dashboard session stats updated via manager: ${savedCount} messages processed, ${newSpamCount} fraud detected`);
+        } catch (dashboardError) {
+          console.warn('⚠️ Failed to update dashboard session stats via manager:', dashboardError.message);
+          
+          // Fallback to direct update
+          try {
+            const dashboardRef = doc(db, 'dashboard', 'stats');
+            const today = new Date().toISOString().split('T')[0];
+            
+            const sessionUpdateData = {
+              totalMessagesAnalyzed: increment(savedCount),
+              smsAnalyzedToday: increment(savedCount),
+              totalSmsAnalyzedToday: increment(savedCount),
+              smsCount: increment(savedCount),
+              activeFraudAlerts: increment(newSpamCount),
+              fraudsPrevented: increment(newSpamCount),
+              lastUpdated: serverTimestamp(),
+              lastSync: serverTimestamp(),
+              syncMethod: 'mobile_scan_fallback',
+              [`daily_${today}.smsCount`]: increment(savedCount),
+              [`daily_${today}.fraudCount`]: increment(newSpamCount),
+              [`daily_${today}.suspiciousCount`]: increment(newSuspiciousCount),
+              [`daily_${today}.safeCount`]: increment(newSafeCount),
+              [`daily_${today}.date`]: today
+            };
+            
+            await updateDoc(dashboardRef, sessionUpdateData);
+            console.log(`📈 Dashboard session stats updated via fallback: ${savedCount} messages processed`);
+          } catch (fallbackError) {
+            console.error('❌ Both dashboard update methods failed:', fallbackError);
+          }
+        }
+
+        // Step 9: Create fraud alerts for suspicious/fraud messages
+        try {
+          console.log('🚨 Processing scan results for fraud alerts...');
+          const alertResult = await MobileAlertSystem.processScanResults(analyzedNewMessages, user.uid);
+          
+          if (alertResult.success) {
+            console.log(`✅ Alert processing complete: ${alertResult.alertsCreated} alerts created`);
+            
+            // Create scan summary alert if there were threats detected
+            if (newSpamCount > 0 || newSuspiciousCount > 0) {
+              const scanSummary = {
+                totalAnalyzed: analyzedNewMessages.length,
+                fraudCount: newSpamCount,
+                suspiciousCount: newSuspiciousCount,
+                safeCount: newSafeCount,
+                duration: 'Real-time scan'
+              };
+              
+              await MobileAlertSystem.createScanSummaryAlert(scanSummary, user.uid);
+              console.log('📊 Scan summary alert created');
+            }
+          } else {
+            console.error('❌ Failed to process alerts:', alertResult.error);
+          }
+        } catch (alertError) {
+          console.error('❌ Alert creation failed:', alertError);
+          // Don't fail the entire scan if alerts fail
+        }
+
+        // Step 10: Combine new and existing messages for display
+        const allCurrentMonthMessages = [...analyzedNewMessages, ...existingMessages]
+          .sort((a, b) => new Date(b.timestamp || b.createdAt) - new Date(a.timestamp || a.createdAt));
+        
+        console.log('📱 Displaying all current month messages in UI...');
+        setMessages(allCurrentMonthMessages);
+        
+        // Mark scan as complete in incremental scanner
+        await SimpleIncrementalScanner.completeScan(user.uid, analyzedNewMessages.length);
+        console.log('✅ Incremental scan timestamp updated');
+        
+        // Step 10.5: Update security score based on analysis results
+        try {
+          console.log('🔒 Updating security score after SMS analysis...');
+          const analysisResults = {
+            totalAnalyzed: analyzedNewMessages.length,
+            fraudCount: newSpamCount,
+            suspiciousCount: newSuspiciousCount,
+            safeCount: newSafeCount
+          };
+          
+          await SecurityScoreManager.updateScoreAfterAnalysis(user.uid, analysisResults);
+          console.log('✅ Security score updated successfully');
+        } catch (scoreError) {
+          console.error('❌ Failed to update security score:', scoreError);
+          // Don't fail the entire scan if security score update fails
+        }
+        
+        // Step 10.6: Update user data after scan completion
+        try {
+          console.log('👤 Updating user data after scan completion...');
+          await UserDataManager.updateUserDataAfterEvent(user.uid, {
+            type: 'sms_scan',
+            messagesAnalyzed: analyzedNewMessages.length,
+            totalMessages: allCurrentMonthMessages.length,
+            fraudCount: newSpamCount,
+            suspiciousCount: newSuspiciousCount,
+            safeCount: newSafeCount,
+            scanTimestamp: new Date().toISOString(),
+            monthScanned: currentMonthName
+          });
+          console.log('✅ User data updated successfully after scan');
+        } catch (userDataError) {
+          console.error('❌ Failed to update user data:', userDataError);
+          // Don't fail the entire scan if user data update fails
+        }
+        
         setScanComplete(true);
         
-        // Step 6: Show analysis summary
-        const spamCount = analyzedMessages.filter(m => m.status === 'fraud').length;
-        const suspiciousCount = analyzedMessages.filter(m => m.status === 'suspicious').length;
-        const safeCount = analyzedMessages.filter(m => m.status === 'safe').length;
+        // Step 11: Show analysis summary
+        const totalCount = allCurrentMonthMessages.length;
+        const totalSafe = allCurrentMonthMessages.filter(m => m.status === 'safe').length;
+        const totalSuspicious = allCurrentMonthMessages.filter(m => m.status === 'suspicious').length;
+        const totalFraud = allCurrentMonthMessages.filter(m => m.status === 'fraud').length;
         
-        console.log(`📊 Analysis Summary: ${safeCount} safe, ${suspiciousCount} suspicious, ${spamCount} fraud`);
+        console.log(`📊 New Analysis: ${newSafeCount} safe, ${newSuspiciousCount} suspicious, ${newSpamCount} fraud`);
+        console.log(`📊 Total for ${currentMonthName}: ${totalSafe} safe, ${totalSuspicious} suspicious, ${totalFraud} fraud`);
         
         Alert.alert(
-          'Current Month Analysis Complete', 
-          `✅ Analyzed ${analyzedMessages.length} transaction messages from ${currentMonthName}:\n\n• ${safeCount} Safe transactions\n• ${suspiciousCount} Suspicious messages\n• ${spamCount} Fraud/spam detected`,
+          'Incremental Analysis Complete', 
+          `✅ Analyzed ${analyzedNewMessages.length} NEW transaction messages:\n• ${newSafeCount} Safe\n• ${newSuspiciousCount} Suspicious\n• ${newSpamCount} Fraud\n\n📊 Total displayed: ${totalCount} messages\n• ${totalSafe} Safe\n• ${totalSuspicious} Suspicious\n• ${totalFraud} Fraud\n\n🔄 Next scan will only analyze messages newer than this scan.`,
           [{ text: 'OK' }]
         );
         
       } catch (apiError) {
         console.error('❌ API analysis failed:', apiError);
         
-        // Fallback: Show messages with unknown status (no Firebase save)
-        const fallbackMessages = transactionMessages.map(message => ({
+        // Fallback: Save new messages with unknown status and combine with existing
+        const fallbackNewMessages = newTransactionMessages.map(message => ({
           ...message,
           status: 'unknown',
           analysis: 'Analysis unavailable - API error. Manual review needed.',
@@ -589,12 +957,32 @@ export default function MessagesScreen() {
           processed: false
         }));
         
-        setMessages(fallbackMessages);
+        console.log('💾 Saving new fallback messages to Firebase...');
+        
+        for (const message of fallbackNewMessages) {
+          try {
+            await saveMessageToFirebase(message);
+            console.log(`✅ Saved fallback message ${message.id} to Firebase`);
+          } catch (error) {
+            console.error(`❌ Failed to save fallback message ${message.id}:`, error);
+          }
+        }
+        
+        // Combine with existing messages
+        const allMessages = [...fallbackNewMessages, ...existingMessages]
+          .sort((a, b) => new Date(b.timestamp || b.createdAt) - new Date(a.timestamp || a.createdAt));
+        
+        setMessages(allMessages);
+        
+        // Mark scan as complete in incremental scanner even for fallback
+        await SimpleIncrementalScanner.completeScan(user.uid, fallbackNewMessages.length);
+        console.log('✅ Incremental scan timestamp updated (fallback)');
+        
         setScanComplete(true);
         
         Alert.alert(
           'Analysis Failed', 
-          `❌ Could not analyze ${currentMonthName} transaction messages due to API error.\n\n${transactionMessages.length} messages displayed for manual review.`,
+          `❌ Could not analyze ${newTransactionMessages.length} new messages due to API error.\n\nShowing ${allMessages.length} total messages (${existingMessages.length} previously analyzed + ${newTransactionMessages.length} new for manual review).`,
           [{ text: 'OK' }]
         );
       }
@@ -655,7 +1043,14 @@ export default function MessagesScreen() {
         processed: true
       };
       
-      // Display the analyzed message directly in UI (no Firebase save)
+      // Save the analyzed message to Firebase and display in UI
+      try {
+        await saveMessageToFirebase(analyzedMessage);
+        console.log('✅ Saved iOS manual message to Firebase');
+      } catch (error) {
+        console.error('❌ Failed to save iOS manual message:', error);
+      }
+      
       setMessages(prevMessages => [analyzedMessage, ...prevMessages]);
       setIosResult(analyzedMessage);
       setIosInput(''); // Clear input after successful analysis
@@ -672,7 +1067,14 @@ export default function MessagesScreen() {
         type: 'manual',
         processed: false
       };
-      // Display fallback result directly in UI (no Firebase save)
+      // Save fallback result to Firebase and display in UI
+      try {
+        await saveMessageToFirebase(fallbackResult);
+        console.log('✅ Saved iOS fallback message to Firebase');
+      } catch (error) {
+        console.error('❌ Failed to save iOS fallback message:', error);
+      }
+      
       setMessages(prevMessages => [fallbackResult, ...prevMessages]);
       setIosResult(fallbackResult);
     } finally {
@@ -719,8 +1121,10 @@ export default function MessagesScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-      {/* Standardized Header */}
-      <View style={styles.header}>
+      
+      <ScreenWrapper>
+        {/* Standardized Header */}
+        <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.greeting}>Messages</Text>
           <Text style={styles.subtitle}>SMS fraud detection & monitoring</Text>
@@ -932,6 +1336,7 @@ export default function MessagesScreen() {
           )}
         </View>
       )}
+      </ScreenWrapper>
     </SafeAreaView>
   );
 }
@@ -940,6 +1345,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0, // Add status bar padding for Android
   },
   header: {
     backgroundColor: colors.surface,
@@ -1261,8 +1667,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text,
     textAlign: 'center',
-  },
-  flatListContent: {
-    paddingBottom: 20,
   },
 });

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import './LoginPage.css';
-import { validateCredentials, createSession } from './utils/auth';
+import { authenticateAdmin, createSession } from './utils/auth';
 
 const LoginPage = ({ onLogin }) => {
   const [email, setEmail] = useState('');
@@ -16,8 +16,8 @@ const LoginPage = ({ onLogin }) => {
     setError('');
     
     try {
-      // Validate credentials
-      const result = validateCredentials(email, password);
+      // Authenticate with Firebase
+      const result = await authenticateAdmin(email, password);
       
       if (!result.success) {
         setError(result.error);
@@ -35,6 +35,7 @@ const LoginPage = ({ onLogin }) => {
       navigate('/overview');
       
     } catch (error) {
+      console.error('Login error:', error);
       setError('Login failed. Please try again.');
     } finally {
       setLoading(false);
@@ -113,11 +114,13 @@ const LoginPage = ({ onLogin }) => {
             borderRadius: '4px',
             border: '1px solid #bee5eb'
           }}>
-            <h4 style={{ margin: '0 0 10px 0', color: '#0c5460' }}>Demo Credentials:</h4>
+            <h4 style={{ margin: '0 0 10px 0', color: '#0c5460' }}>Admin Accounts:</h4>
             <div style={{ fontSize: '12px', color: '#0c5460' }}>
-              <p style={{ margin: '5px 0' }}>Super Admin: superadmin@finsight.rw / SuperAdmin123!</p>
-              <p style={{ margin: '5px 0' }}>Admin: admin@finsight.rw / AdminFinSight2025!</p>
-              <p style={{ margin: '5px 0' }}>Moderator: moderator@finsight.rw / Moderator456!</p>
+              <p style={{ margin: '5px 0' }}>🔥 Firebase Authentication Required</p>
+              <p style={{ margin: '5px 0' }}>Create these admin accounts in Firebase:</p>
+              <p style={{ margin: '5px 0' }}>• admin@finsight.rw (Admin role)</p>
+              <p style={{ margin: '5px 0' }}>• superadmin@finsight.rw (Super Admin)</p>
+              <p style={{ margin: '5px 0' }}>• moderator@finsight.rw (Moderator)</p>
             </div>
           </div>
         </div>

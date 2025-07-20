@@ -147,6 +147,18 @@ executionHistory.bin
 libopenblas*.dll
 icudt*.dll
 libclang.dll
+_pywrap_tensorflow_internal*.dll
+_pywrap_tensorflow_internal*.pyd
+
+# Large Git pack files
+*.pack
+.git/objects/pack/*.pack
+
+# Large React Native binaries
+libreactnative.so
+*.so
+app-debug.apk
+app-release.apk
 
 # Expo and React Native cache
 .expo/

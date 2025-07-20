@@ -54,4 +54,6 @@ export default {
   // Additional colors
   white: '#FFFFFF',
   black: '#000000',
+  disabled: '#D1D5DB',
+  lightGray: '#F3F4F6',
 };

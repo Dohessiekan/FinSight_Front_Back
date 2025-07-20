@@ -1,323 +1,210 @@
-import React, { useState, useMemo } from 'react';
-import PageHeader from './PageHeader';
-import './SMSInbox.css';
-
-// --- MOCK DATA FROM MOBILE APP USERS ---
-const initialMessages = [
-  { id: 1, from: '+15551234567', customerId: 'mobile_user_001', content: 'Your account has been locked due to suspicious activity. Please verify your identity by clicking here: http://bit.ly/suspicious-link', timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Phishing', riskScore: 95, status: 'New', priority: 'High', detectionMethod: 'Mobile App Scan', appSource: 'FinSight Mobile' },
-  { id: 2, from: 'MoMoPay', customerId: 'mobile_user_002', content: 'You have received a payment of RWF 50,000 from John Doe. Your new balance is RWF 125,000.', timestamp: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), amount: 50000, type: 'Transaction', riskScore: 10, status: 'Reviewed', priority: 'Low', detectionMethod: 'Mobile ML Analysis', appSource: 'FinSight Mobile' },
-  { id: 3, from: '+250788123456', customerId: 'mobile_user_003', content: 'Congratulations! You have won a lottery of RWF 1,000,000. To claim your prize, please send a small processing fee of RWF 5,000 to this number.', timestamp: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(), amount: 1000000, type: 'Scam', riskScore: 85, status: 'New', priority: 'High', detectionMethod: 'User Report via App', appSource: 'FinSight Mobile' },
-  { id: 4, from: 'YourBank', customerId: 'mobile_user_004', content: 'A new device has been registered to your account. If this was not you, please contact us immediately at 1-800-FAKE-BANK.', timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Security Alert', riskScore: 60, status: 'Notified', priority: 'Medium', detectionMethod: 'Mobile App Analysis', appSource: 'FinSight Mobile' },
-  { id: 5, from: '+15559876543', customerId: 'mobile_user_005', content: 'Your package is out for delivery. Track it here: https://not-a-real-tracker.com/xyz', timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Smishing', riskScore: 75, status: 'New', priority: 'Medium', detectionMethod: 'Mobile Pattern Recognition', appSource: 'FinSight Mobile' },
-  { id: 6, from: 'TaxOffice', customerId: 'mobile_user_006', content: 'URGENT: Your tax refund is pending. You must update your information to receive it. Visit: fake-tax-site.com/refund', timestamp: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), amount: 0, type: 'Scam', riskScore: 90, status: 'Escalated', priority: 'High', detectionMethod: 'Mobile AI Detection', appSource: 'FinSight Mobile' },
-  { id: 7, from: 'MoMoPay', customerId: 'mobile_user_007', content: 'Payment of RWF 1,200,000 to "Online Store" was successful.', timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), amount: 1200000, type: 'Transaction', riskScore: 25, status: 'Reviewed', priority: 'Low', detectionMethod: 'Mobile App Verification', appSource: 'FinSight Mobile' },
-  { id: 8, from: '+250781112233', customerId: 'mobile_user_008', content: 'We have detected a fraudulent transaction of RWF 750,000 on your card. Please confirm if this was you. Reply YES or NO.', timestamp: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(), amount: 750000, type: 'Fraud Alert', riskScore: 80, status: 'New', priority: 'High', detectionMethod: 'Mobile User Flagged', appSource: 'FinSight Mobile' },
-];
-
-// --- HELPER FUNCTIONS ---
-const getTimeAgo = (dateString) => {
-  const date = new Date(dateString);
-  const now = new Date();
-  const seconds = Math.round((now - date) / 1000);
-  const minutes = Math.round(seconds / 60);
-  const hours = Math.round(minutes / 60);
-  const days = Math.round(hours / 24);
-
-  if (seconds < 60) return `${seconds}s ago`;
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  return `${days}d ago`;
-};
-
-const formatAmount = (amount) => {
-  if (amount === 0) return '-';
-  return `RWF ${amount.toLocaleString()}`;
-};
-
-const getRiskScoreColor = (score) => {
-  if (score > 80) return 'risk-high';
-  if (score > 60) return 'risk-medium';
-  return 'risk-low';
-};
-
-const getStatusColor = (status) => {
-  switch (status.toLowerCase()) {
-    case 'new': return 'status-new';
-    case 'reviewed': return 'status-reviewed';
-    case 'notified': return 'status-notified';
-    case 'escalated': return 'status-escalated';
-    default: return '';
-  }
-};
+import React from 'react';
 
 const SMSInbox = () => {
-  // --- STATE MANAGEMENT ---
-  const [messages, setMessages] = useState(initialMessages);
-  const [searchTerm] = useState('');
-  const [sortConfig, setSortConfig] = useState({ key: 'timestamp', direction: 'descending' });
-  const [currentPage, setCurrentPage] = useState(1);
-  const [selectedMessages, setSelectedMessages] = useState([]);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedMessage, setSelectedMessage] = useState(null);
-
-  const MESSAGES_PER_PAGE = 8;
-
-  // --- DERIVED STATE & MEMOIZED COMPUTATIONS ---
-  const filteredMessages = useMemo(() => {
-    let filtered = messages;
-
-    // Search filter
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase();
-      filtered = filtered.filter(msg =>
-        msg.content.toLowerCase().includes(searchLower) ||
-        msg.from.toLowerCase().includes(searchLower) ||
-        msg.customerId.toLowerCase().includes(searchLower)
-      );
-    }
-
-    // You would expand this with dateRange, amount, and type filters in a real app
-    
-    return filtered;
-  }, [messages, searchTerm]);
-
-  const sortedMessages = useMemo(() => {
-    let sortableMessages = [...filteredMessages];
-    if (sortConfig.key !== null) {
-      sortableMessages.sort((a, b) => {
-        if (a[sortConfig.key] < b[sortConfig.key]) {
-          return sortConfig.direction === 'ascending' ? -1 : 1;
-        }
-        if (a[sortConfig.key] > b[sortConfig.key]) {
-          return sortConfig.direction === 'ascending' ? 1 : -1;
-        }
-        return 0;
-      });
-    }
-    return sortableMessages;
-  }, [filteredMessages, sortConfig]);
-
-  const currentMessages = useMemo(() => {
-    const startIndex = (currentPage - 1) * MESSAGES_PER_PAGE;
-    return sortedMessages.slice(startIndex, startIndex + MESSAGES_PER_PAGE);
-  }, [sortedMessages, currentPage]);
-
-  const totalPages = Math.ceil(sortedMessages.length / MESSAGES_PER_PAGE);
-
-  // --- EVENT HANDLERS ---
-  const handleSort = (key) => {
-    let direction = 'ascending';
-    if (sortConfig.key === key && sortConfig.direction === 'ascending') {
-      direction = 'descending';
-    }
-    setSortConfig({ key, direction });
-  };
-
-  const handleSelectMessage = (id) => {
-    setSelectedMessages(prev =>
-      prev.includes(id) ? prev.filter(msgId => msgId !== id) : [...prev, id]
-    );
-  };
-
-  const handleSelectAll = (e) => {
-    if (e.target.checked) {
-      setSelectedMessages(currentMessages.map(msg => msg.id));
-    } else {
-      setSelectedMessages([]);
-    }
-  };
-
-  const showMessageDetail = (message) => {
-    setSelectedMessage(message);
-    setIsModalOpen(true);
-  };
-
-  const closeModal = () => {
-    setIsModalOpen(false);
-    setTimeout(() => setSelectedMessage(null), 300); // Delay for closing animation
-  };
-
-  const updateMessageStatus = (messageId, newStatus) => {
-    setMessages(prev =>
-      prev.map(msg =>
-        msg.id === messageId ? { ...msg, status: newStatus } : msg
-      )
-    );
-  };
-
-  const handleNotifyUser = (messageId) => {
-    updateMessageStatus(messageId, 'Notified');
-    console.log(`Notifying user for message ${messageId}`);
-  };
-
-  const handleMarkAsReviewed = (messageId) => {
-    updateMessageStatus(messageId, 'Reviewed');
-    console.log(`Marking message ${messageId} as reviewed`);
-  };
-
-  const handleEscalate = (messageId) => {
-    updateMessageStatus(messageId, 'Escalated');
-    console.log(`Escalating message ${messageId}`);
-  };
-
-  const handleBulkAction = (action) => {
-    const newStatus = action.split('-').pop(); // e.g., "Mark as Reviewed" -> "Reviewed"
-    setMessages(prev =>
-      prev.map(msg =>
-        selectedMessages.includes(msg.id) ? { ...msg, status: newStatus } : msg
-      )
-    );
-    setSelectedMessages([]);
-    console.log(`Bulk action: ${action} on messages:`, selectedMessages);
-  };
-
-  const isAllSelected = selectedMessages.length === currentMessages.length && currentMessages.length > 0;
-
-  // --- RENDER ---
   return (
-    <div className="admin-dashboard-container">
-      <PageHeader title="Mobile App SMS Analysis - Admin Monitor" />
+    <div style={{ padding: '20px' }}>
+      <h2>SMS Inbox</h2>
+      <p>SMS messages will appear here</p>
+    </div>
+  );
+};
 
-      {/* Summary Stats */}
-      <div className="admin-stats-summary">
-        <div className="stat-card-admin">
-          <div className="stat-value">{filteredMessages.length}</div>
-          <div className="stat-label">Total Messages</div>
+export default SMSInbox;
+
+  // Mock data for now to ensure the component works
+  useEffect(() => {
+    setTimeout(() => {
+      setMessages([
+        {
+          id: 1,
+          sender: 'Mobile User 1',
+          phone: '+250781234567',
+          content: 'Test SMS message from mobile app',
+          timestamp: new Date().toISOString(),
+          riskScore: 25,
+          status: 'new',
+          type: 'Transaction'
+        },
+        {
+          id: 2,
+          sender: 'Mobile User 2', 
+          phone: '+250789876543',
+          content: 'Another test message for fraud detection',
+          timestamp: new Date(Date.now() - 3600000).toISOString(),
+          riskScore: 85,
+          status: 'new',
+          type: 'Phishing'
+        }
+      ]);
+      setLoading(false);
+    }, 1000);
+  }, []);
+
+  const getTimeAgo = (dateString) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const minutes = Math.round((now - date) / (1000 * 60));
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.round(hours / 24);
+    return `${days}d ago`;
+  };
+
+  const getRiskColor = (score) => {
+    if (score > 80) return '#e74c3c';
+    if (score > 60) return '#f39c12';
+    return '#27ae60';
+  };
+
+  const filteredMessages = messages.filter(message =>
+    message.content.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    message.sender.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    message.phone.includes(searchTerm)
+  );
+
+  return (
+    <div style={{ padding: '20px', backgroundColor: '#f8f9fa', minHeight: '100vh' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <h2 style={{ color: '#2c3e50', marginBottom: '10px' }}>SMS Inbox - Mobile App Messages</h2>
+        <p style={{ color: '#7f8c8d' }}>Messages from FinSight mobile app users</p>
+      </div>
+      
+      <div style={{ background: 'white', padding: '20px', borderRadius: '8px', marginBottom: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+        <div style={{ marginBottom: '15px' }}>
+          <input
+            type="text"
+            placeholder="Search messages, phone numbers..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: '1px solid #ddd',
+              borderRadius: '6px',
+              fontSize: '14px'
+            }}
+          />
         </div>
-        <div className="stat-card-admin">
-          <div className="stat-value">{filteredMessages.filter(m => m.status === 'New').length}</div>
-          <div className="stat-label">New Alerts</div>
-        </div>
-        <div className="stat-card-admin">
-          <div className="stat-value">{filteredMessages.filter(m => m.status === 'Escalated').length}</div>
-          <div className="stat-label">Cases Escalated</div>
-        </div>
-        <div className="stat-card-admin">
-          <div className="stat-value">{filteredMessages.filter(m => m.priority === 'High').length}</div>
-          <div className="stat-label">High-Priority</div>
+        
+        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '15px', background: '#f8f9fa', borderRadius: '6px', minWidth: '100px' }}>
+            <span style={{ fontSize: '24px', fontWeight: 'bold', color: '#2c3e50' }}>{filteredMessages.length}</span>
+            <span style={{ fontSize: '12px', color: '#7f8c8d', marginTop: '5px' }}>Total Messages</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '15px', background: '#f8f9fa', borderRadius: '6px', minWidth: '100px' }}>
+            <span style={{ fontSize: '24px', fontWeight: 'bold', color: '#2c3e50' }}>{filteredMessages.filter(m => m.riskScore > 80).length}</span>
+            <span style={{ fontSize: '12px', color: '#7f8c8d', marginTop: '5px' }}>High Risk</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '15px', background: '#f8f9fa', borderRadius: '6px', minWidth: '100px' }}>
+            <span style={{ fontSize: '24px', fontWeight: 'bold', color: '#2c3e50' }}>{filteredMessages.filter(m => m.status === 'new').length}</span>
+            <span style={{ fontSize: '12px', color: '#7f8c8d', marginTop: '5px' }}>Unreviewed</span>
+          </div>
         </div>
       </div>
 
-      {/* Controls Header */}
-      <div className="admin-controls-header">
-        <div className="search-and-filter">
-          {/* FILTERS CONTAINER - Re-integrated */}
-          <div className="filters-container">
-             {/* Your filter chips JSX here */}
-          </div>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '40px', background: 'white', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+          <p>Loading SMS messages...</p>
         </div>
-        {selectedMessages.length > 0 && (
-          <div className="bulk-actions-bar">
-            <span className="bulk-actions-label">{selectedMessages.length} selected</span>
-            <button onClick={() => handleBulkAction('Mark as Reviewed')} className="bulk-action-btn">Mark as Reviewed</button>
-            <button onClick={() => handleBulkAction('Notify Users')} className="bulk-action-btn">Notify Users</button>
-            <button onClick={() => handleBulkAction('Escalate')} className="bulk-action-btn escalate">Escalate</button>
-          </div>
-        )}
-      </div>
-
-      {/* Messages Table */}
-      <div className="messages-table-container">
-        <div className="messages-table-header">
-          <div className="header-cell checkbox-cell">
-            <input type="checkbox" onChange={handleSelectAll} checked={isAllSelected} />
-          </div>
-          <div className="header-cell message-details" onClick={() => handleSort('content')}>Message Details</div>
-          <div className="header-cell risk-score" onClick={() => handleSort('riskScore')}>Risk Score</div>
-          <div className="header-cell status" onClick={() => handleSort('status')}>Status</div>
-          <div className="header-cell actions">Actions</div>
-        </div>
-        <div className="admin-messages-list">
-          {currentMessages.map(message => (
-            <div key={message.id} className={`admin-message-card ${selectedMessages.includes(message.id) ? 'selected' : ''}`}>
-              <div className="cell checkbox-cell">
-                <input type="checkbox" checked={selectedMessages.includes(message.id)} onChange={() => handleSelectMessage(message.id)} />
-              </div>
-              <div className="cell message-details">
-                <div className="message-from">From: {message.from} <span>(Customer ID: {message.customerId})</span></div>
-                <div className="message-content">{message.content}</div>
-                <div className="message-meta">
-                  <span>{getTimeAgo(message.timestamp)}</span> | <span>Type: {message.type}</span> | <span>Amount: {formatAmount(message.amount)}</span>
-                </div>
-              </div>
-              <div className="cell risk-score">
-                <div className={`message-risk-score ${getRiskScoreColor(message.riskScore)}`}>
-                  <span className="risk-score-value">{message.riskScore}</span>
-                  <span className="risk-score-label">{message.priority}</span>
-                </div>
-              </div>
-              <div className="cell status">
-                <span className={`message-status ${getStatusColor(message.status)}`}>{message.status}</span>
-              </div>
-              <div className="cell message-actions">
-                <button onClick={() => showMessageDetail(message)} className="action-btn view">View</button>
-              </div>
+      ) : (
+        <div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+          {filteredMessages.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px', color: '#7f8c8d' }}>
+              <h3>No messages found</h3>
+              <p>No SMS messages match your search criteria.</p>
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Pagination */}
-      <div className="pagination-container">
-        <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>Previous</button>
-        <span>Page {currentPage} of {totalPages}</span>
-        <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>Next</button>
-      </div>
-
-      {/* Message Detail Modal */}
-      {isModalOpen && selectedMessage && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="message-detail-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Message Details</h3>
-              <button className="close-modal-btn" onClick={closeModal}>&times;</button>
+          ) : (
+            <div style={{ padding: '0' }}>
+              {filteredMessages.map((message, index) => (
+                <div key={message.id} style={{
+                  padding: '20px',
+                  borderBottom: index < filteredMessages.length - 1 ? '1px solid #eee' : 'none',
+                  transition: 'background-color 0.2s'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <strong>{message.sender}</strong>
+                      <span style={{ fontSize: '12px', color: '#7f8c8d' }}>{message.phone}</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                      <span style={{ fontSize: '12px', color: '#7f8c8d' }}>{getTimeAgo(message.timestamp)}</span>
+                      <span style={{ fontSize: '12px', fontWeight: 'bold', color: getRiskColor(message.riskScore) }}>
+                        {message.riskScore}% risk
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <div style={{ margin: '15px 0' }}>
+                    <p style={{ margin: '0', color: '#2c3e50', lineHeight: '1.5' }}>{message.content}</p>
+                  </div>
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <span style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        textTransform: 'uppercase',
+                        background: message.type === 'Transaction' ? '#d4edda' : '#f8d7da',
+                        color: message.type === 'Transaction' ? '#155724' : '#721c24'
+                      }}>
+                        {message.type}
+                      </span>
+                      <span style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        textTransform: 'uppercase',
+                        background: '#cce5ff',
+                        color: '#004085'
+                      }}>
+                        {message.status}
+                      </span>
+                    </div>
+                    
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button style={{
+                        padding: '6px 12px',
+                        border: 'none',
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        background: '#007bff',
+                        color: 'white'
+                      }}>
+                        Review
+                      </button>
+                      <button style={{
+                        padding: '6px 12px',
+                        border: 'none',
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        background: '#6c757d',
+                        color: 'white'
+                      }}>
+                        Mark Safe
+                      </button>
+                      <button style={{
+                        padding: '6px 12px',
+                        border: 'none',
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        background: '#dc3545',
+                        color: 'white'
+                      }}>
+                        Block
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
-            <div className="modal-content">
-              <div className="detail-group">
-                <span className="detail-label">From:</span>
-                <span className="detail-value">{selectedMessage.from}</span>
-              </div>
-              <div className="detail-group">
-                <span className="detail-label">Customer ID:</span>
-                <span className="detail-value">{selectedMessage.customerId}</span>
-              </div>
-              <div className="detail-group">
-                <span className="detail-label">Received:</span>
-                <span className="detail-value">{new Date(selectedMessage.timestamp).toLocaleString()} ({getTimeAgo(selectedMessage.timestamp)})</span>
-              </div>
-              <div className="detail-group">
-                <span className="detail-label">Full Message:</span>
-                <p className="detail-message-content">{selectedMessage.content}</p>
-              </div>
-              <div className="detail-grid">
-                <div className="detail-group">
-                  <span className="detail-label">Risk Score:</span>
-                  <span className={`detail-value ${getRiskScoreColor(selectedMessage.riskScore)}`}>{selectedMessage.riskScore} ({selectedMessage.priority})</span>
-                </div>
-                <div className="detail-group">
-                  <span className="detail-label">Status:</span>
-                  <span className={`detail-value ${getStatusColor(selectedMessage.status)}`}>{selectedMessage.status}</span>
-                </div>
-                <div className="detail-group">
-                  <span className="detail-label">Message Type:</span>
-                  <span className="detail-value">{selectedMessage.type}</span>
-                </div>
-                 <div className="detail-group">
-                  <span className="detail-label">Transaction Amount:</span>
-                  <span className="detail-value">{formatAmount(selectedMessage.amount)}</span>
-                </div>
-                <div className="detail-group">
-                  <span className="detail-label">Detection Method:</span>
-                  <span className="detail-value">{selectedMessage.detectionMethod}</span>
-                </div>
-              </div>
-            </div>
-            <div className="modal-actions">
-              <button onClick={() => { handleMarkAsReviewed(selectedMessage.id); closeModal(); }} className="action-btn review">Mark as Reviewed</button>
-              <button onClick={() => { handleNotifyUser(selectedMessage.id); closeModal(); }} className="action-btn notify">Notify User</button>
-              <button onClick={() => { handleEscalate(selectedMessage.id); closeModal(); }} className="action-btn escalate">Escalate Case</button>
-            </div>
-          </div>
+          )}
         </div>
       )}
     </div>

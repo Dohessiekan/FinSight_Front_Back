@@ -1,4 +1,6 @@
 // Authentication utilities for FinSight Admin Dashboard
+import { auth } from '../config/firebase';
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 
 // Admin roles and permissions
 export const ADMIN_ROLES = {
@@ -42,49 +44,108 @@ export const ROLE_PERMISSIONS = {
   ]
 };
 
-// Admin credentials (In production, this should be in a secure backend)
-export const ADMIN_CREDENTIALS = {
+// Admin user mapping (email to role mapping)
+// 🔧 ADD YOUR ADMIN EMAILS HERE - You can use any email addresses!
+export const ADMIN_USERS = {
+  // Default system accounts
   'admin@finsight.rw': {
-    password: 'AdminFinSight2025!',
     role: ADMIN_ROLES.ADMIN,
-    name: 'Admin User',
+    name: 'System Admin',
     department: 'Fraud Prevention'
   },
   'superadmin@finsight.rw': {
-    password: 'SuperAdmin123!',
     role: ADMIN_ROLES.SUPER_ADMIN,
     name: 'Super Administrator',
     department: 'System Management'
   },
   'moderator@finsight.rw': {
-    password: 'Moderator456!',
     role: ADMIN_ROLES.MODERATOR,
     name: 'Fraud Moderator',
     department: 'Investigation Team'
+  },
+  
+  // 📝 ADD YOUR TEAM'S REAL EMAIL ADDRESSES HERE:
+  // Example - replace with actual emails:
+  // 'john.doe@company.com': {
+  //   role: ADMIN_ROLES.ADMIN,
+  //   name: 'John Doe',
+  //   department: 'IT Security'
+  // },
+  // 'jane.smith@company.com': {
+  //   role: ADMIN_ROLES.SUPER_ADMIN,
+  //   name: 'Jane Smith', 
+  //   department: 'System Management'
+  // },
+  // 'mike.wilson@company.com': {
+  //   role: ADMIN_ROLES.MODERATOR,
+  //   name: 'Mike Wilson',
+  //   department: 'Investigation'
+  // }
+};
+
+// Firebase Authentication functions
+export const authenticateAdmin = async (email, password) => {
+  try {
+    console.log('🔐 Authenticating admin with Firebase...');
+    
+    // Check if user is in admin list
+    if (!ADMIN_USERS[email]) {
+      return { success: false, error: 'Access denied. Not an authorized administrator.' };
+    }
+    
+    // Authenticate with Firebase
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+    
+    // Get admin data
+    const adminData = ADMIN_USERS[email];
+    
+    console.log('✅ Firebase authentication successful');
+    
+    return { 
+      success: true, 
+      admin: {
+        email: user.email,
+        uid: user.uid,
+        role: adminData.role,
+        name: adminData.name,
+        department: adminData.department,
+        permissions: ROLE_PERMISSIONS[adminData.role]
+      }
+    };
+  } catch (error) {
+    console.error('❌ Firebase authentication failed:', error);
+    
+    let errorMessage = 'Authentication failed';
+    if (error.code === 'auth/user-not-found') {
+      errorMessage = 'Admin account not found';
+    } else if (error.code === 'auth/wrong-password') {
+      errorMessage = 'Invalid password';
+    } else if (error.code === 'auth/invalid-email') {
+      errorMessage = 'Invalid email address';
+    } else if (error.code === 'auth/too-many-requests') {
+      errorMessage = 'Too many failed attempts. Try again later';
+    }
+    
+    return { success: false, error: errorMessage };
   }
 };
 
-// Authentication functions
-export const validateCredentials = (email, password) => {
-  const admin = ADMIN_CREDENTIALS[email];
-  if (!admin) {
-    return { success: false, error: 'Invalid email address' };
+// Firebase sign out
+export const signOutAdmin = async () => {
+  try {
+    await signOut(auth);
+    clearSession();
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Sign out failed:', error);
+    return { success: false, error: 'Sign out failed' };
   }
-  
-  if (admin.password !== password) {
-    return { success: false, error: 'Invalid password' };
-  }
-  
-  return { 
-    success: true, 
-    admin: {
-      email,
-      role: admin.role,
-      name: admin.name,
-      department: admin.department,
-      permissions: ROLE_PERMISSIONS[admin.role]
-    }
-  };
+};
+
+// Legacy function for compatibility - now uses Firebase
+export const validateCredentials = async (email, password) => {
+  return await authenticateAdmin(email, password);
 };
 
 export const createSession = (adminData) => {

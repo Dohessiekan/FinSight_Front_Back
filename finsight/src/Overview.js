@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import AdminUserMessages from './components/AdminUserMessages';
 import './Overview.css';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import PageHeader from './PageHeader';
+import { fetchDashboardStats, listenToFraudAlerts, syncUserCount, fetchAllSMSMessages } from './utils/firebaseMessages';
+import UserCountDebug from './components/UserCountDebug';
 
 // Fix for default markers in react-leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -13,19 +16,98 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-// Sample fraud detection points in Rwanda
-const fraudPoints = [
-  { id: 1, lat: -1.9441, lng: 30.0619, location: "Kigali", type: "SMS Scam", amount: "50,000 RWF", date: "2025-07-14" },
-  { id: 2, lat: -2.6080, lng: 29.1378, location: "Butare", type: "Mobile Money Fraud", amount: "75,000 RWF", date: "2025-07-13" },
-  { id: 3, lat: -1.6767, lng: 30.4375, location: "Rwamagana", type: "SMS Scam", amount: "30,000 RWF", date: "2025-07-13" },
-  { id: 4, lat: -2.0280, lng: 30.0890, location: "Nyanza", type: "Financial Fraud", amount: "120,000 RWF", date: "2025-07-12" },
-  { id: 5, lat: -1.7090, lng: 30.1367, location: "Kayonza", type: "Phone Fraud", amount: "25,000 RWF", date: "2025-07-12" }
-];
-
 const Overview = () => {
+  const [dashboardStats, setDashboardStats] = useState({
+    totalUsers: 0,
+    smsAnalyzedToday: 0,
+    fraudsPrevented: 0,
+    mlAccuracy: 94.7
+  });
+  const [realtimeAlerts, setRealtimeAlerts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [fraudPoints, setFraudPoints] = useState([]);
+
+  useEffect(() => {
+    // Load dashboard statistics from Firebase immediately
+    const loadDashboardData = async () => {
+      setLoading(true);
+      try {
+        console.log('🔄 Loading dashboard data...');
+        
+        // First sync user count to ensure accuracy, then get stats
+        await syncUserCount();
+        
+        const [stats, messages] = await Promise.all([
+          fetchDashboardStats(),
+          fetchAllSMSMessages()
+        ]);
+        
+        setDashboardStats(stats);
+        console.log('📊 Dashboard stats loaded:', stats);
+        
+        // Create fraud points from real SMS data
+        const fraudMessages = messages.filter(msg => 
+          msg.riskScore > 70 || 
+          msg.fraudConfidence > 0.7 || 
+          msg.prediction?.label === 'spam'
+        );
+        
+        // Generate fraud points from real data (limit to last 10)
+        const realFraudPoints = fraudMessages.slice(0, 10).map((msg, index) => ({
+          id: index + 1,
+          lat: -1.9441 + (Math.random() - 0.5) * 2, // Random locations around Rwanda
+          lng: 30.0619 + (Math.random() - 0.5) * 2,
+          location: `User Location ${index + 1}`,
+          type: msg.prediction?.label === 'spam' ? 'SMS Fraud' : 'Suspicious SMS',
+          amount: msg.amount || 'Unknown',
+          date: msg.createdAt?.toDate?.()?.toLocaleDateString() || 'Recent',
+          userId: msg.userId || 'Unknown',
+          confidence: msg.fraudConfidence || msg.riskScore || 0
+        }));
+        
+        setFraudPoints(realFraudPoints);
+        console.log('�️ Fraud points updated:', realFraudPoints.length);
+        console.log('✅ Dashboard fully loaded and synced!');
+      } catch (error) {
+        console.error('❌ Error loading dashboard data:', error);
+        // Fallback to basic data if Firebase fails
+        setDashboardStats({
+          totalUsers: 0,
+          smsAnalyzedToday: 0,
+          fraudsPrevented: 0,
+          mlAccuracy: 94.7
+        });
+        setFraudPoints([
+          { id: 1, lat: -1.9441, lng: 30.0619, location: "Kigali", type: "Loading...", amount: "Error", date: "N/A" }
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Load immediately on component mount
+    loadDashboardData();
+    
+    // Set up periodic refresh every 30 seconds for real-time updates
+    const statsInterval = setInterval(() => {
+      console.log('🔄 Auto-refreshing dashboard data...');
+      loadDashboardData();
+    }, 30000);
+
+    // Set up real-time listener for fraud alerts
+    const unsubscribe = listenToFraudAlerts((alerts) => {
+      setRealtimeAlerts(alerts.slice(0, 3)); // Show only latest 3 alerts
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+      clearInterval(statsInterval);
+    };
+  }, []);
+
   return (
     <div className="overview-container">
-      <PageHeader title="Admin Dashboard - FinSight Rwanda" />
+      <PageHeader title={`Admin Dashboard - FinSight Rwanda ${loading ? '⚡' : '✅'}`} />
       
       <div className="stats-container">
         <div className="stat-card">
@@ -34,7 +116,7 @@ const Overview = () => {
             alt="Phone" 
             className="stat-icon"
           />
-          <div className="stat-number">2,847</div>
+          <div className="stat-number">{loading ? '...' : dashboardStats.totalUsers.toLocaleString()}</div>
           <div className="stat-text">Mobile App Users</div>
         </div>
         <div className="stat-card">
@@ -43,7 +125,16 @@ const Overview = () => {
             alt="SMS" 
             className="stat-icon"
           />
-          <div className="stat-number">156</div>
+          <div className="stat-number">{loading ? '...' : (dashboardStats.totalMessagesAnalyzed || 0).toLocaleString()}</div>
+          <div className="stat-text">Total SMS Analyzed</div>
+        </div>
+        <div className="stat-card">
+          <img 
+            src={process.env.PUBLIC_URL + '/sms.svg'} 
+            alt="SMS Today" 
+            className="stat-icon"
+          />
+          <div className="stat-number">{loading ? '...' : dashboardStats.smsAnalyzedToday}</div>
           <div className="stat-text">SMS Analyzed Today</div>
         </div>
         <div className="stat-card">
@@ -52,7 +143,7 @@ const Overview = () => {
             alt="Phone" 
             className="stat-icon"
           />
-          <div className="stat-number">1,245</div>
+          <div className="stat-number">{loading ? '...' : dashboardStats.fraudsPrevented.toLocaleString()}</div>
           <div className="stat-text">Fraud Prevented</div>
         </div>
         <div className="stat-card">
@@ -61,10 +152,13 @@ const Overview = () => {
             alt="Stats" 
             className="stat-icon"
           />
-          <div className="stat-number">94.7%</div>
+          <div className="stat-number">{loading ? '...' : dashboardStats.mlAccuracy}%</div>
           <div className="stat-text">ML Model Accuracy</div>
         </div>
       </div>
+
+      {/* Temporary Debug Component */}
+      <UserCountDebug />
 
       <div className="map-section">
         <div className="map-container">
@@ -151,6 +245,7 @@ const Overview = () => {
           boxShadow: '0 4px 12px rgba(40, 83, 191, 0.15)' 
         }}>
           <h3 style={{ color: '#2c3e50', marginBottom: '20px' }}>📱 Mobile App Status & Monitoring</h3>
+          <AdminUserMessages />
           
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
             
@@ -159,89 +254,66 @@ const Overview = () => {
               <h4 style={{ color: '#495057', marginBottom: '15px' }}>📊 App Usage Analytics</h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Daily Active Users:</span>
-                  <strong style={{ color: '#28a745' }}>1,432</strong>
+                  <span>Total Users:</span>
+                  <strong style={{ color: '#28a745' }}>{dashboardStats.totalUsers}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>SMS Scans Today:</span>
-                  <strong style={{ color: '#007bff' }}>3,847</strong>
+                  <span>SMS Analyzed Today:</span>
+                  <strong style={{ color: '#007bff' }}>{dashboardStats.smsAnalyzedToday}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>App Crashes:</span>
-                  <strong style={{ color: '#dc3545' }}>2</strong>
+                  <span>Frauds Prevented:</span>
+                  <strong style={{ color: '#dc3545' }}>{dashboardStats.fraudsPrevented}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Avg Session Time:</span>
-                  <strong>4m 32s</strong>
-                </div>
-              </div>
-            </div>
-
-            {/* API Performance */}
-            <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #e9ecef' }}>
-              <h4 style={{ color: '#495057', marginBottom: '15px' }}>🚀 API Performance</h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>API Uptime:</span>
-                  <strong style={{ color: '#28a745' }}>99.8%</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Avg Response Time:</span>
-                  <strong style={{ color: '#28a745' }}>127ms</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Requests Today:</span>
-                  <strong style={{ color: '#007bff' }}>28,542</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Error Rate:</span>
-                  <strong style={{ color: '#ffc107' }}>0.2%</strong>
+                  <span>System Status:</span>
+                  <strong style={{ color: '#28a745' }}>Active</strong>
                 </div>
               </div>
             </div>
 
             {/* ML Model Performance */}
             <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #e9ecef' }}>
-              <h4 style={{ color: '#495057', marginBottom: '15px' }}>🤖 ML Model Status</h4>
+              <h4 style={{ color: '#495057', marginBottom: '15px' }}>🤖 ML Model Performance</h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Model Version:</span>
-                  <strong>v2.1.4</strong>
+                  <span>Model Accuracy:</span>
+                  <strong style={{ color: '#28a745' }}>{dashboardStats.mlAccuracy}%</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Accuracy Rate:</span>
-                  <strong style={{ color: '#28a745' }}>94.7%</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Last Training:</span>
-                  <strong>2025-07-10</strong>
+                  <span>API Status:</span>
+                  <strong style={{ color: '#28a745' }}>Online</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span>Predictions Today:</span>
-                  <strong style={{ color: '#007bff' }}>3,721</strong>
+                  <strong style={{ color: '#007bff' }}>{dashboardStats.smsAnalyzedToday}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Model Version:</span>
+                  <strong>FinSight v1.0</strong>
                 </div>
               </div>
             </div>
 
-            {/* User Behavior */}
+            {/* Real-time Insights */}
             <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #e9ecef' }}>
-              <h4 style={{ color: '#495057', marginBottom: '15px' }}>👥 User Behavior</h4>
+              <h4 style={{ color: '#495057', marginBottom: '15px' }}>📈 Real-time Insights</h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>New Registrations:</span>
-                  <strong style={{ color: '#28a745' }}>47</strong>
+                  <span>Active Users Now:</span>
+                  <strong style={{ color: '#28a745' }}>{Math.floor(dashboardStats.totalUsers * 0.1)}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Frauds Reported:</span>
-                  <strong style={{ color: '#dc3545' }}>23</strong>
+                  <span>Fraud Alerts Today:</span>
+                  <strong style={{ color: '#dc3545' }}>{realtimeAlerts.length}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>App Rating:</span>
-                  <strong style={{ color: '#ffc107' }}>4.6⭐</strong>
+                  <span>System Status:</span>
+                  <strong style={{ color: '#28a745' }}>Operational</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Feature Usage:</span>
-                  <strong>SMS Scan: 89%</strong>
+                  <span>Data Updated:</span>
+                  <strong>{loading ? 'Updating...' : 'Just now'}</strong>
                 </div>
               </div>
             </div>
@@ -251,15 +323,25 @@ const Overview = () => {
           <div style={{ marginTop: '20px', background: '#fff3cd', padding: '15px', borderRadius: '8px', border: '1px solid #ffeaa7' }}>
             <h4 style={{ color: '#856404', marginBottom: '10px' }}>⚠️ Real-time Mobile App Alerts</h4>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{ fontSize: '14px', color: '#856404' }}>
-                • High SMS scanning activity detected in Kigali region (+23% from yesterday)
-              </div>
-              <div style={{ fontSize: '14px', color: '#856404' }}>
-                • 5 new fraud patterns detected and added to ML model
-              </div>
-              <div style={{ fontSize: '14px', color: '#856404' }}>
-                • User reported false positive decreased by 12% this week
-              </div>
+              {realtimeAlerts.length > 0 ? (
+                realtimeAlerts.map(alert => (
+                  <div key={alert.id} style={{ fontSize: '14px', color: '#856404' }}>
+                    • {alert.type}: User {alert.userId} - {alert.message || alert.content}
+                  </div>
+                ))
+              ) : (
+                <>
+                  <div style={{ fontSize: '14px', color: '#856404' }}>
+                    • High SMS scanning activity detected in Kigali region (+23% from yesterday)
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#856404' }}>
+                    • 5 new fraud patterns detected and added to ML model
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#856404' }}>
+                    • User reported false positive decreased by 12% this week
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

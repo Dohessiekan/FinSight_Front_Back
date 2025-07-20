@@ -1,72 +1,113 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './App.css';
 import Sidebar from './Sidebar'; // Import the Sidebar component
 import { Routes, Route, Navigate } from 'react-router-dom'; // Import Routes and Route
+import LoginPage from './LoginPage.jsx'; // Import the LoginPage component
 import Overview from './Overview'; // Import the Overview component
-import SMSInbox from './SMSInbox'; // Import the SMSInbox component
-import LoginPage from './LoginPage'; // Import the LoginPage component
-import SettingsPage from './SettingsPage'; // Import the SettingsPage component
-import FinancialSummary from './FinancialSummary'; // Import the real FinancialSummary component
+import SettingsPage from './SettingsPage.jsx'; // Import the SettingsPage component
+import FinancialSummary from './FinancialSummary.jsx'; // Import the real FinancialSummary component
+import SMSInbox from './SMSInboxClean'; // Import SMSInbox component
+import FirebaseDataTest from './components/FirebaseDataTest';
+import SMSAnalysisTest from './components/SMSAnalysisTest'; // Test component
 import { getSession, clearSession, updateLastActivity, checkInactivity } from './utils/auth';
+
+import { auth, db } from './config/firebase';
+import { signInAnonymously } from 'firebase/auth';
+import { onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 
 // Fraud Alerts component for admin monitoring
 const FraudAlerts = () => {
-  const [alerts] = useState([
-    {
-      id: 1,
-      timestamp: '2025-07-14 10:30:22',
-      type: 'High Risk SMS - Mobile App',
-      severity: 'critical',
-      phone: '+250 788 123 456',
-      message: 'User scanned: "Urgent: Send 5000 RWF to claim your prize..."',
-      confidence: 94,
-      status: 'active',
-      source: 'Mobile App',
-      userId: 'user_4821'
-    },
-    {
-      id: 2,
-      timestamp: '2025-07-14 09:15:45',
-      type: 'Multiple Fraud Attempts',
-      severity: 'warning',
-      phone: '+250 789 987 654',
-      message: 'Same number attempted fraud on 3 different mobile users',
-      confidence: 87,
-      status: 'investigating',
-      source: 'API Analysis',
-      userId: 'multiple'
-    },
-    {
-      id: 3,
-      timestamp: '2025-07-14 08:22:33',
-      type: 'Known Fraud Network',
-      severity: 'high',
-      phone: '+250 790 555 777',
-      message: 'Mobile user reported: Part of verified scammer network',
-      confidence: 91,
-      status: 'blocked',
-      source: 'User Report',
-      userId: 'user_3392'
-    },
-    {
-      id: 4,
-      timestamp: '2025-07-14 07:45:12',
-      type: 'ML Model Alert',
-      severity: 'warning',
-      phone: '+250 782 445 667',
-      message: 'New fraud pattern detected by mobile app users',
-      confidence: 78,
-      status: 'active',
-      source: 'ML Analysis',
-      userId: 'pattern_detection'
-    }
-  ]);
+  const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Set up real-time listener for fraud alerts
+  useEffect(() => {
+    let unsubscribe;
+    
+    const setupRealtimeAlerts = () => {
+      try {
+        setLoading(true);
+        
+        // Create real-time listener for fraudAlerts collection
+        const alertsRef = collection(db, 'fraudAlerts');
+        const q = query(
+          alertsRef, 
+          orderBy('createdAt', 'desc'), 
+          limit(20) // Get latest 20 alerts
+        );
+        
+        unsubscribe = onSnapshot(q, (snapshot) => {
+          const realTimeAlerts = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data(),
+            timestamp: doc.data().createdAt?.toDate?.()?.toLocaleString() || 
+                      doc.data().detectedAt?.toDate?.()?.toLocaleString() || 
+                      new Date().toLocaleString()
+          }));
+          
+          console.log(`🔄 Real-time alerts update: ${realTimeAlerts.length} alerts received`);
+          
+          // If no real alerts, show helpful placeholder
+          if (realTimeAlerts.length === 0) {
+            setAlerts([{
+              id: 'placeholder',
+              timestamp: new Date().toLocaleString(),
+              type: 'No Fraud Alerts',
+              severity: 'info',
+              phone: 'N/A',
+              message: '✨ No fraud alerts detected yet. Start analyzing SMS in your mobile app to see real-time security alerts appear here!',
+              confidence: 0,
+              status: 'info',
+              source: 'FinSight Security System',
+              userId: 'system',
+              priority: 'info'
+            }]);
+          } else {
+            setAlerts(realTimeAlerts);
+          }
+          
+          setLoading(false);
+        }, (error) => {
+          console.error('❌ Real-time alerts listener error:', error);
+          setAlerts([{
+            id: 'error',
+            timestamp: new Date().toLocaleString(),
+            type: 'Connection Error',
+            severity: 'warning',
+            phone: 'N/A',
+            message: '⚠️ Unable to load real-time fraud alerts. Check Firebase connection.',
+            confidence: 0,
+            status: 'error',
+            source: 'System Error',
+            userId: 'error',
+            priority: 'medium'
+          }]);
+          setLoading(false);
+        });
+        
+      } catch (error) {
+        console.error('❌ Failed to setup real-time alerts:', error);
+        setLoading(false);
+      }
+    };
+    
+    setupRealtimeAlerts();
+    
+    // Cleanup function
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+        console.log('🔄 Real-time alerts listener cleaned up');
+      }
+    };
+  }, []);
 
   const getSeverityColor = (severity) => {
     switch(severity) {
       case 'critical': return '#e74c3c';
       case 'high': return '#f39c12';
       case 'warning': return '#f1c40f';
+      case 'info': return '#3498db';
       default: return '#95a5a6';
     }
   };
@@ -87,11 +128,16 @@ const FraudAlerts = () => {
         <p style={{ color: '#7f8c8d' }}>Real-time monitoring of fraud activities from FinSight mobile app users</p>
       </div>
       
-      <div style={{ display: 'grid', gap: '15px' }}>
-        {alerts.map(alert => (
-          <div key={alert.id} style={{
-            background: 'white',
-            border: `2px solid ${getSeverityColor(alert.severity)}`,
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '40px', color: '#7f8c8d' }}>
+          <p>Loading fraud alerts from Firebase...</p>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '15px' }}>
+          {alerts.map(alert => (
+            <div key={alert.id} style={{
+              background: 'white',
+              border: `2px solid ${getSeverityColor(alert.severity)}`,
             borderRadius: '8px',
             padding: '15px',
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
@@ -180,7 +226,8 @@ const FraudAlerts = () => {
             </div>
           </div>
         ))}
-      </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -188,6 +235,23 @@ const FraudAlerts = () => {
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [adminInfo, setAdminInfo] = useState(null);
+
+  // Initialize Firebase authentication on app start
+  React.useEffect(() => {
+    const initializeFirebase = async () => {
+      try {
+        if (!auth.currentUser) {
+          console.log('🔐 Initializing Firebase authentication...');
+          await signInAnonymously(auth);
+          console.log('✅ Firebase authentication successful');
+        }
+      } catch (error) {
+        console.error('❌ Firebase initialization failed:', error);
+      }
+    };
+
+    initializeFirebase();
+  }, []);
 
   // Check for existing authentication on app load
   React.useEffect(() => {
@@ -257,7 +321,9 @@ function App() {
           <Route path="/sms-inbox" element={<SMSInbox />} />
           <Route path="/fraud-alerts" element={<FraudAlerts />} />
           <Route path="/financial-summary" element={<FinancialSummary />} />
-          <Route path="/settings" element={<SettingsPage adminInfo={adminInfo} />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/firebase-test" element={<FirebaseDataTest />} />
+          <Route path="/sms-analysis-test" element={<SMSAnalysisTest />} />
           <Route path="/" element={<Navigate to="/overview" replace />} />
           <Route path="/login" element={<Navigate to="/overview" replace />} />
         </Routes>
