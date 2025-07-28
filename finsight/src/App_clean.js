@@ -10,7 +10,6 @@ import SMSInbox from './SMSInboxClean'; // Import SMSInbox component
 import FirebaseDataTest from './components/FirebaseDataTest';
 import SMSAnalysisTest from './components/SMSAnalysisTest'; // Test component
 import FraudAlerts from './components/FraudAlerts'; // Import enhanced FraudAlerts component
-import AdminNotificationCenter from './components/AdminNotificationCenter'; // Import admin notifications
 import { getSession, clearSession, updateLastActivity, checkInactivity } from './utils/auth';
 
 function App() {
@@ -80,7 +79,6 @@ function App() {
           <Route path="/overview" element={<Overview />} />
           <Route path="/sms-inbox" element={<SMSInbox />} />
           <Route path="/fraud-alerts" element={<FraudAlerts />} />
-          <Route path="/admin-notifications" element={<AdminNotificationCenter />} />
           <Route path="/financial-summary" element={<FinancialSummary />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/firebase-test" element={<FirebaseDataTest />} />

@@ -7,13 +7,14 @@
 
 import { collection, addDoc, serverTimestamp, doc, updateDoc, increment } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import UserLocationManager from './UserLocationManager';
 
 export class MobileAlertSystem {
   
   /**
    * Create a fraud alert when a suspicious/fraud message is detected
    */
-  static async createFraudAlert(message, userId, analysisResult) {
+  static async createFraudAlert(message, userId, analysisResult, userLocation = null) {
     try {
       console.log(`🚨 Creating fraud alert for message from ${message.sender}`);
       
@@ -23,16 +24,37 @@ export class MobileAlertSystem {
         return { success: true, skipped: true, reason: 'safe_message' };
       }
       
-      // Create the fraud alert document
+      // Try to get current location or use provided location
+      let locationData = userLocation;
+      if (!locationData) {
+        try {
+          // Try to get device location or Rwanda region approximation
+          locationData = await UserLocationManager.requestDeviceLocation();
+        } catch (locationError) {
+          console.warn('⚠️ Could not get location:', locationError);
+          // Use default Rwanda location
+          locationData = UserLocationManager.getRwandaRegionCoordinates('kigali');
+        }
+      }
+      
+      // Update user's location in their profile for future mapping
+      try {
+        await UserLocationManager.updateUserLocation(userId, locationData);
+      } catch (updateError) {
+        console.warn('⚠️ Could not update user location profile:', updateError);
+      }
+      
+      // Create the fraud alert document (matching web app format)
       const alertData = {
-        // Basic alert info
+        // Basic alert info (required by web app Overview.js)
         type: message.status === 'fraud' ? 'Fraud Detected' : 'Suspicious Activity',
         severity: this.calculateSeverity(message, analysisResult),
         status: 'active',
         
-        // Message details
-        messageId: message.id,
-        messageText: (message.text || '').substring(0, 200), // First 200 chars
+        // Message details (required by web app display)
+        content: (message.text || '').substring(0, 200), // Web app looks for 'content' field
+        message: (message.text || '').substring(0, 100), // Also provide 'message' field as fallback
+        messageText: (message.text || '').substring(0, 200),
         sender: message.sender || message.address || 'Unknown',
         phone: message.phone || message.sender || 'Unknown',
         
@@ -42,10 +64,31 @@ export class MobileAlertSystem {
         riskScore: this.calculateRiskScore(message, analysisResult),
         fraudType: analysisResult?.label || message.spamData?.label || message.status,
         
-        // User and source info
+        // User and source info (required by web app)
         userId: userId,
         source: 'FinSight Mobile App',
-        location: message.location || 'Mobile Device',
+        
+        // Location data for map display (matching web app format)
+        location: {
+          coordinates: {
+            latitude: locationData?.latitude || -1.9441,
+            longitude: locationData?.longitude || 30.0619,
+            address: locationData?.address || 'Rwanda',
+            city: locationData?.city || 'Unknown',
+            accuracy: locationData?.accuracy || null,
+            isDefault: locationData?.isRealGPS === false, // Mark as default if not real GPS
+            source: locationData?.source || 'mobile_app'
+          },
+          address: {
+            formattedAddress: locationData?.address || `${locationData?.city || 'Unknown'}, Rwanda`
+          },
+          formattedLocation: locationData?.address || locationData?.city || 'Mobile Device',
+          quality: {
+            hasRealGPS: locationData?.isRealGPS === true, // Track if this is real GPS
+            accuracy: locationData?.accuracy || null,
+            source: locationData?.source || 'mobile_app'
+          }
+        },
         
         // Timestamps
         detectedAt: serverTimestamp(),
@@ -73,8 +116,8 @@ export class MobileAlertSystem {
         priority: this.calculatePriority(message, analysisResult)
       };
       
-      // Save to fraudAlerts collection
-      const alertsRef = collection(db, 'fraudAlerts');
+      // Save to fraud_alerts collection (monitored by web app)
+      const alertsRef = collection(db, 'fraud_alerts');
       const alertDoc = await addDoc(alertsRef, alertData);
       
       console.log(`✅ Fraud alert created with ID: ${alertDoc.id}`);

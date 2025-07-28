@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchAllSMSMessages, updateSMSMessageStatus } from './utils/firebaseMessages';
+import { AdminMessageManager } from './utils/AdminMessageManager';
+import { getSession } from './utils/auth';
 import SMSInboxTester from './utils/SMSInboxTester';
 
 const SMSInbox = () => {
@@ -107,7 +109,10 @@ const SMSInbox = () => {
             fraudType: msg.fraudType || msg.analysis?.category || null,
             aiAnalysis: msg.analysis ? `${msg.analysis.isFraud ? 'FRAUD DETECTED' : 'SAFE'} - ${msg.analysis.category || 'General SMS'} (${Math.round((msg.analysis.confidence || 0) * 100)}% confidence)` : 'AI analysis pending',
             source: msg.source || 'Mobile App',
-            location: msg.location || 'Unknown Location',
+            location: (() => {
+              const loc = msg.location || 'Unknown Location';
+              return typeof loc === 'string' ? loc : (loc?.formattedLocation || loc?.address || 'Unknown Location');
+            })(),
             isRead: msg.isRead !== undefined ? msg.isRead : true,
             actions: msg.actions || [],
             // Additional metadata from Firebase
@@ -210,60 +215,111 @@ const SMSInbox = () => {
   const handleMarkSafe = async (messageId) => {
     try {
       const message = messages.find(msg => msg.id === messageId);
-      if (message) {
-        // Update Firebase
-        await updateSMSMessageStatus(message.userId, messageId, {
-          status: 'safe',
-          riskScore: Math.min(message.riskScore, 20),
-          actions: [...(message.actions || []), 'manually_marked_safe'],
-          adminAction: 'marked_safe',
-          adminActionTimestamp: new Date().toISOString()
-        });
+      if (!message) {
+        alert('Message not found');
+        return;
+      }
+
+      // Get admin session info
+      const session = getSession();
+      const adminEmail = session?.email || 'admin@finsight.com';
+
+      console.log(`🔒 Admin proactively marking message ${messageId} as safe for user ${message.userId}`);
+
+      // Use comprehensive AdminMessageManager for system-wide updates (PROACTIVE ACTION)
+      const result = await AdminMessageManager.markFraudAsSafe(
+        messageId,
+        message.userId,
+        adminEmail,
+        'Admin proactively verified message as legitimate via SMS Analysis dashboard',
+        true // isProactive = true for direct admin action
+      );
+
+      if (result.success) {
+        console.log('✅ Message proactively marked as safe with comprehensive updates');
         
-        // Update local state
+        // Update local state to reflect the change
         setMessages(prev => prev.map(msg => 
           msg.id === messageId 
             ? { 
                 ...msg, 
                 status: 'safe', 
                 riskScore: Math.min(msg.riskScore, 20),
-                actions: [...(msg.actions || []), 'manually_marked_safe']
+                actions: [...(msg.actions || []), 'admin_proactive_safe'],
+                adminVerified: true,
+                lastAdminAction: {
+                  action: 'proactive_marked_safe',
+                  adminEmail: adminEmail,
+                  timestamp: new Date().toISOString()
+                }
               }
             : msg
         ));
+
+        alert('✅ Message proactively marked as safe! User will be notified and all systems updated including mobile app, fraud alerts, security score, and location data.');
+      } else {
+        console.error('❌ Failed to mark message as safe:', result.error);
+        alert(`❌ Failed to update message: ${result.error}`);
       }
     } catch (error) {
-      console.error('Error marking message as safe:', error);
-      alert('Failed to update message status. Please try again.');
+      console.error('❌ Error marking message as safe:', error);
+      alert('❌ Failed to update message status. Please try again.');
     }
   };
 
   const handleFlag = async (messageId) => {
     try {
       const message = messages.find(msg => msg.id === messageId);
-      if (message) {
-        // Update Firebase
-        await updateSMSMessageStatus(message.userId, messageId, {
-          status: 'flagged',
-          actions: [...(message.actions || []), 'manually_flagged'],
-          adminAction: 'flagged',
-          adminActionTimestamp: new Date().toISOString()
-        });
+      if (!message) {
+        alert('Message not found');
+        return;
+      }
+
+      // Get admin session info
+      const session = getSession();
+      const adminEmail = session?.email || 'admin@finsight.com';
+
+      console.log(`🚨 Admin proactively marking message ${messageId} as fraud for user ${message.userId}`);
+
+      // Use comprehensive AdminMessageManager for system-wide updates (PROACTIVE ACTION)
+      const result = await AdminMessageManager.markSafeAsFraud(
+        messageId,
+        message.userId,
+        adminEmail,
+        'Admin proactively flagged message as fraudulent via SMS Analysis dashboard',
+        true // isProactive = true for direct admin action
+      );
+
+      if (result.success) {
+        console.log('✅ Message proactively flagged as fraud with comprehensive updates');
         
-        // Update local state
+        // Update local state to reflect the change
         setMessages(prev => prev.map(msg => 
           msg.id === messageId 
             ? { 
                 ...msg, 
                 status: 'flagged', 
-                actions: [...(msg.actions || []), 'manually_flagged'] 
+                riskScore: Math.max(msg.riskScore, 80),
+                actions: [...(msg.actions || []), 'admin_proactive_flagged_fraud'],
+                adminVerified: true,
+                adminFlagged: true,
+                lastAdminAction: {
+                  action: 'proactive_flagged_fraud',
+                  adminEmail: adminEmail,
+                  timestamp: new Date().toISOString()
+                }
               }
             : msg
         ));
+
+        alert('🚨 Message proactively flagged as fraud! User will be notified and all systems updated including mobile app, fraud alerts, security score, and location data.');
+      } else {
+        console.error('❌ Failed to flag message as fraud:', result.error);
+        alert(`❌ Failed to update message: ${result.error}`);
       }
     } catch (error) {
-      console.error('Error flagging message:', error);
-      alert('Failed to flag message. Please try again.');
+      console.error('❌ Error flagging message:', error);
+      alert('❌ Failed to flag message. Please try again.');
     }
   };
 
@@ -300,91 +356,65 @@ const SMSInbox = () => {
     try {
       const selectedMessageObjects = messages.filter(msg => selectedMessages.includes(msg.id));
       
-      // Update Firebase for each selected message
-      const updatePromises = selectedMessageObjects.map(async (message) => {
-        let updateData = {
-          adminAction: action,
-          adminActionTimestamp: new Date().toISOString()
-        };
-        
-        switch(action) {
-          case 'mark_safe':
-            updateData = {
-              ...updateData,
-              status: 'safe',
-              riskScore: Math.min(message.riskScore, 20),
-              actions: [...(message.actions || []), 'bulk_marked_safe']
-            };
-            break;
-          case 'flag':
-            updateData = {
-              ...updateData,
-              status: 'flagged',
-              actions: [...(message.actions || []), 'bulk_flagged']
-            };
-            break;
-          case 'block':
-            updateData = {
-              ...updateData,
-              status: 'blocked',
-              actions: [...(message.actions || []), 'bulk_blocked']
-            };
-            break;
-          default:
-            console.log('Unknown bulk action:', action);
-            return;
-        }
-        
-        return updateSMSMessageStatus(message.userId, message.id, updateData);
-      });
-      
-      await Promise.all(updatePromises);
-      
-      // Update local state
-      switch(action) {
-        case 'mark_safe':
-          setMessages(prev => prev.map(msg => 
-            selectedMessages.includes(msg.id) 
-              ? { 
-                  ...msg, 
-                  status: 'safe', 
-                  riskScore: Math.min(msg.riskScore, 20),
-                  actions: [...(msg.actions || []), 'bulk_marked_safe']
-                }
-              : msg
-          ));
-          break;
-        case 'flag':
-          setMessages(prev => prev.map(msg => 
-            selectedMessages.includes(msg.id) 
-              ? { 
-                  ...msg, 
-                  status: 'flagged', 
-                  actions: [...(msg.actions || []), 'bulk_flagged'] 
-                }
-              : msg
-          ));
-          break;
-        case 'block':
-          setMessages(prev => prev.map(msg => 
-            selectedMessages.includes(msg.id) 
-              ? { 
-                  ...msg, 
-                  status: 'blocked', 
-                  actions: [...(msg.actions || []), 'bulk_blocked'] 
-                }
-              : msg
-          ));
-          break;
-        default:
-          console.log('Unknown bulk action:', action);
-          break;
+      if (selectedMessageObjects.length === 0) {
+        alert('No messages selected');
+        return;
       }
-      
-      setSelectedMessages([]);
+
+      // Get admin session info
+      const session = getSession();
+      const adminEmail = session?.email || 'admin@finsight.com';
+
+      console.log(`🔄 Admin performing bulk ${action} on ${selectedMessageObjects.length} messages`);
+
+      // Prepare bulk actions for AdminMessageManager
+      const messageActions = selectedMessageObjects.map(message => ({
+        messageId: message.id,
+        userId: message.userId,
+        action: action === 'mark_safe' ? 'fraud_to_safe' : 'safe_to_fraud',
+        reason: `Bulk admin action: ${action} via SMS Analysis dashboard`
+      }));
+
+      // Use AdminMessageManager for bulk updates with comprehensive system-wide changes
+      const result = await AdminMessageManager.bulkUpdateMessages(messageActions, adminEmail);
+
+      if (result.summary.successful > 0) {
+        console.log(`✅ Bulk action completed: ${result.summary.successful} successful, ${result.summary.failed} failed`);
+
+        // Update local state for successful updates
+        result.successful.forEach(({ messageId, action: actionType }) => {
+          setMessages(prev => prev.map(msg => {
+            if (msg.id === messageId) {
+              const isMarkSafe = actionType === 'fraud_to_safe';
+              return {
+                ...msg,
+                status: isMarkSafe ? 'safe' : 'flagged',
+                riskScore: isMarkSafe ? Math.min(msg.riskScore, 20) : Math.max(msg.riskScore, 80),
+                actions: [...(msg.actions || []), `bulk_admin_${isMarkSafe ? 'safe' : 'fraud'}`],
+                adminVerified: true,
+                adminFlagged: !isMarkSafe,
+                lastAdminAction: {
+                  action: isMarkSafe ? 'bulk_marked_safe' : 'bulk_flagged_fraud',
+                  adminEmail: adminEmail,
+                  timestamp: new Date().toISOString()
+                }
+              };
+            }
+            return msg;
+          }));
+        });
+
+        // Clear selection
+        setSelectedMessages([]);
+
+        alert(`✅ Bulk action completed! ${result.summary.successful} messages updated with comprehensive system-wide changes.\n${result.summary.failed > 0 ? `${result.summary.failed} messages failed to update.` : ''}`);
+      } else {
+        console.error('❌ All bulk actions failed');
+        alert('❌ All bulk actions failed. Please try again.');
+      }
     } catch (error) {
-      console.error('Error performing bulk action:', error);
-      alert('Failed to perform bulk action. Some messages may not have been updated.');
+      console.error('❌ Error in bulk action:', error);
+      alert('❌ Failed to perform bulk action. Please try again.');
     }
   };
 
@@ -450,7 +480,10 @@ const SMSInbox = () => {
           fraudType: msg.fraudType || msg.analysis?.category || null,
           aiAnalysis: msg.analysis ? `${msg.analysis.isFraud ? 'FRAUD DETECTED' : 'SAFE'} - ${msg.analysis.category || 'General SMS'} (${Math.round((msg.analysis.confidence || 0) * 100)}% confidence)` : 'AI analysis pending',
           source: msg.source || 'Mobile App',
-          location: msg.location || 'Unknown Location',
+          location: (() => {
+            const loc = msg.location || 'Unknown Location';
+            return typeof loc === 'string' ? loc : (loc?.formattedLocation || loc?.address || 'Unknown Location');
+          })(),
           isRead: msg.isRead !== undefined ? msg.isRead : true,
           actions: msg.actions || [],
           processed: msg.processed || false,
@@ -479,6 +512,31 @@ const SMSInbox = () => {
 
   return (
     <div style={{ padding: '20px', maxWidth: '1400px' }}>
+      
+      {/* Admin Action Info Banner */}
+      <div style={{ 
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+        color: 'white', 
+        padding: '15px', 
+        borderRadius: '8px', 
+        marginBottom: '20px',
+        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+          <span style={{ fontSize: '18px' }}>👮‍♂️</span>
+          <h3 style={{ margin: 0, fontSize: '16px' }}>Admin SMS Analysis Dashboard</h3>
+        </div>
+        <p style={{ margin: 0, fontSize: '14px', opacity: 0.9 }}>
+          ✨ <strong>Comprehensive Admin Actions:</strong> Mark messages as Safe or Flag as Fraud with system-wide updates including:
+        </p>
+        <ul style={{ margin: '8px 0 0 20px', fontSize: '13px', opacity: 0.9 }}>
+          <li>📱 Real-time mobile app updates & user notifications</li>
+          <li>🚨 Fraud alert management & security score adjustments</li>
+          <li>📍 Location map data synchronization</li>
+          <li>📊 Dashboard statistics & audit trails</li>
+        </ul>
+      </div>
+
       {/* Header */}
       <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
@@ -736,11 +794,35 @@ const SMSInbox = () => {
         <div style={{ background: '#3498db', color: 'white', padding: '15px', borderRadius: '8px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>{selectedMessages.length} message(s) selected</span>
           <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={() => handleBulkAction('mark_safe')} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer' }}>
-              Mark Safe
+            <button onClick={() => handleBulkAction('mark_safe')} 
+              disabled={loading}
+              style={{ 
+                background: loading ? '#95a5a6' : '#27ae60', 
+                color: 'white', 
+                border: 'none', 
+                padding: '8px 16px', 
+                borderRadius: '4px', 
+                cursor: loading ? 'not-allowed' : 'pointer',
+                opacity: loading ? 0.6 : 1
+              }}
+              title="Mark selected messages as safe with comprehensive system-wide updates"
+            >
+              🛡️ Mark Safe
             </button>
-            <button onClick={() => handleBulkAction('flag')} style={{ background: '#f39c12', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer' }}>
-              Flag
+            <button onClick={() => handleBulkAction('flag')} 
+              disabled={loading}
+              style={{ 
+                background: loading ? '#95a5a6' : '#f39c12', 
+                color: 'white', 
+                border: 'none', 
+                padding: '8px 16px', 
+                borderRadius: '4px', 
+                cursor: loading ? 'not-allowed' : 'pointer',
+                opacity: loading ? 0.6 : 1
+              }}
+              title="Flag selected messages as fraud with comprehensive system-wide updates"
+            >
+              ⚠️ Flag
             </button>
             <button onClick={() => handleBulkAction('block')} style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer' }}>
               Block
@@ -831,7 +913,7 @@ const SMSInbox = () => {
                       <span style={{ fontSize: '20px' }}>{getCategoryIcon(message.category)}</span>
                       <div>
                         <strong style={{ color: '#2c3e50' }}>{message.sender}</strong>
-                        <div style={{ fontSize: '12px', color: '#7f8c8d' }}>{message.phone} • {message.location}</div>
+                        <div style={{ fontSize: '12px', color: '#7f8c8d' }}>{message.phone} • {typeof message.location === 'string' ? message.location : (message.location?.formattedLocation || message.location?.address || 'Unknown Location')}</div>
                       </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
@@ -930,32 +1012,39 @@ const SMSInbox = () => {
                       </button>
                       <button
                         onClick={() => handleMarkSafe(message.id)}
-                        disabled={message.status === 'safe'}
+                        disabled={message.status === 'safe' || loading}
                         style={{
                           background: message.status === 'safe' ? '#95a5a6' : '#27ae60',
                           color: 'white',
                           border: 'none',
                           padding: '6px 12px',
                           borderRadius: '4px',
-                          cursor: message.status === 'safe' ? 'not-allowed' : 'pointer',
-                          fontSize: '12px'
+                          cursor: (message.status === 'safe' || loading) ? 'not-allowed' : 'pointer',
+                          fontSize: '12px',
+                          opacity: (message.status === 'safe' || loading) ? 0.6 : 1
                         }}
+                        title={message.status === 'safe' ? 'Already marked as safe' : 'Mark this message as safe (comprehensive system update)'}
                       >
-                        Mark Safe
+                        {message.status === 'safe' ? '✅ Safe' : '🛡️ Mark Safe'}
+                        {message.adminVerified && message.lastAdminAction?.action === 'marked_safe' && ' (Admin)'}
                       </button>
                       <button
                         onClick={() => handleFlag(message.id)}
+                        disabled={message.status === 'flagged' || loading}
                         style={{
-                          background: '#f39c12',
+                          background: message.status === 'flagged' ? '#c0392b' : '#f39c12',
                           color: 'white',
                           border: 'none',
                           padding: '6px 12px',
                           borderRadius: '4px',
-                          cursor: 'pointer',
-                          fontSize: '12px'
+                          cursor: (message.status === 'flagged' || loading) ? 'not-allowed' : 'pointer',
+                          fontSize: '12px',
+                          opacity: (message.status === 'flagged' || loading) ? 0.6 : 1
                         }}
+                        title={message.status === 'flagged' ? 'Already flagged as fraud' : 'Flag this message as fraud (comprehensive system update)'}
                       >
-                        Flag
+                        {message.status === 'flagged' ? '🚨 Flagged' : '⚠️ Flag as Fraud'}
+                        {message.adminFlagged && message.lastAdminAction?.action === 'flagged_fraud' && ' (Admin)'}
                       </button>
                       <button
                         onClick={() => handleBlock(message.id)}
@@ -982,7 +1071,7 @@ const SMSInbox = () => {
                         <div><strong>User ID:</strong> {message.userId}</div>
                         <div><strong>Message ID:</strong> {message.id}</div>
                         <div><strong>Source:</strong> {message.source}</div>
-                        <div><strong>Location:</strong> {message.location}</div>
+                        <div><strong>Location:</strong> {typeof message.location === 'string' ? message.location : (message.location?.formattedLocation || message.location?.address || JSON.stringify(message.location) || 'Unknown Location')}</div>
                         <div><strong>Timestamp:</strong> {new Date(message.timestamp).toLocaleString()}</div>
                         <div><strong>Read Status:</strong> {message.isRead ? 'Read' : 'Unread'}</div>
                       </div>
@@ -1002,6 +1091,45 @@ const SMSInbox = () => {
                                 {action.replace('_', ' ')}
                               </span>
                             ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Admin Action History */}
+                      {(message.adminVerified || message.adminFlagged || message.lastAdminAction) && (
+                        <div style={{ 
+                          marginTop: '15px', 
+                          padding: '12px', 
+                          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+                          borderRadius: '6px',
+                          color: 'white'
+                        }}>
+                          <h5 style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            👮‍♂️ Admin Action History
+                          </h5>
+                          
+                          {message.adminVerified && (
+                            <div style={{ fontSize: '12px', marginBottom: '4px' }}>
+                              ✅ <strong>Admin Verified:</strong> Message verified as legitimate
+                            </div>
+                          )}
+                          
+                          {message.adminFlagged && (
+                            <div style={{ fontSize: '12px', marginBottom: '4px' }}>
+                              🚨 <strong>Admin Flagged:</strong> Message flagged as fraudulent
+                            </div>
+                          )}
+                          
+                          {message.lastAdminAction && (
+                            <div style={{ fontSize: '12px', marginTop: '6px', padding: '6px', background: 'rgba(255,255,255,0.2)', borderRadius: '4px' }}>
+                              <div><strong>Last Action:</strong> {message.lastAdminAction.action?.replace('_', ' ')}</div>
+                              <div><strong>Admin:</strong> {message.lastAdminAction.adminEmail || 'Unknown'}</div>
+                              <div><strong>Time:</strong> {new Date(message.lastAdminAction.timestamp).toLocaleString()}</div>
+                            </div>
+                          )}
+                          
+                          <div style={{ fontSize: '11px', marginTop: '6px', opacity: 0.9 }}>
+                            📱 System-wide updates: Mobile app, fraud alerts, security score, location data
                           </div>
                         </div>
                       )}

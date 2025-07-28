@@ -2,6 +2,8 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import AuthService from '../services/AuthService';
 import DataRecoveryService from '../services/DataRecoveryService';
 import { createSimpleUserProfile } from '../utils/firebaseMessages';
+import LocationService from '../services/LocationService';
+import LocationPermissionManager from '../services/LocationPermissionManager';
 
 const AuthContext = createContext({});
 
@@ -17,6 +19,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState(null); // Add userData state
+  const [locationStatus, setLocationStatus] = useState(null); // Add location status
 
   useEffect(() => {
     const unsubscribe = AuthService.onAuthStateChanged(async (user) => {
@@ -75,8 +78,37 @@ export const AuthProvider = ({ children }) => {
           }
         }, 2000);
         
+        // Handle location permission on every user login (including after logout)
+        setTimeout(async () => {
+          try {
+            console.log('📍 AUTH: Handling location permission for user login...');
+            const locationResult = await LocationPermissionManager.handleUserLogin(user.uid);
+            
+            setLocationStatus(locationResult);
+            
+            if (locationResult.success) {
+              console.log('✅ AUTH: Location handled successfully on login:', locationResult.action);
+              if (locationResult.location) {
+                console.log('📍 AUTH: Location data:', locationResult.location);
+              }
+            } else {
+              console.log('⚠️ AUTH: Location not enabled on login:', locationResult.action || locationResult.error);
+            }
+            
+          } catch (error) {
+            console.error('❌ AUTH: Location error on login:', error);
+            setLocationStatus({
+              success: false,
+              error: error.message
+            });
+          }
+        }, 3000); // Run after profile creation
+        
       } else {
         console.log('🔥 AUTH: User signed out');
+        
+        // Clear location login session
+        await LocationPermissionManager.clearLoginSession();
         
         // Clear data recovery service
         if (userData?.userId) {
@@ -84,6 +116,7 @@ export const AuthProvider = ({ children }) => {
         }
         DataRecoveryService.setUserId(null);
         setUserData(null);
+        setLocationStatus(null); // Clear location status on logout
       }
       
       setLoading(false);
@@ -126,6 +159,7 @@ export const AuthProvider = ({ children }) => {
   const value = {
     user,
     userData, // Add userData to context
+    locationStatus, // Add location status to context
     loading,
     signIn,
     signUp,
@@ -143,7 +177,51 @@ export const AuthProvider = ({ children }) => {
         return refreshedData;
       }
       return null;
-    }
+    },
+    // Add location functions
+    refreshLocationStatus: async () => {
+      if (user) {
+        try {
+          const locationResult = await LocationService.updateUserLocation(user.uid);
+          setLocationStatus(locationResult);
+          return locationResult;
+        } catch (error) {
+          console.error('❌ Location refresh failed:', error);
+          return { success: false, error: error.message };
+        }
+      }
+      return null;
+    },
+    getCurrentLocation: async () => {
+      if (user) {
+        try {
+          return await LocationService.getUserLocation(user.uid);
+        } catch (error) {
+          console.error('❌ Get current location failed:', error);
+          return { success: false, error: error.message };
+        }
+      }
+      return null;
+    },
+    hasLocationPermission: () => LocationService.hasLocationPermission(),
+    requestLocationPermission: () => LocationService.requestLocationPermission(),
+    // Add new permission manager functions
+    getLocationStatus: () => LocationPermissionManager.getLocationStatus(),
+    isLocationEnabledInApp: () => LocationPermissionManager.isLocationEnabledInApp(),
+    handleLocationPermissionCheck: async () => {
+      if (user) {
+        return await LocationPermissionManager.handleAppStartupLocationCheck(user.uid);
+      }
+      return null;
+    },
+    handleUserLoginLocationCheck: async () => {
+      if (user) {
+        return await LocationPermissionManager.handleUserLogin(user.uid);
+      }
+      return null;
+    },
+    clearLocationSession: () => LocationPermissionManager.clearLoginSession(),
+    resetLocationPreferences: () => LocationPermissionManager.resetLocationPreferences()
   };
 
   return (

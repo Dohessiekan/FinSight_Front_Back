@@ -2,9 +2,8 @@ import React, { useEffect, useState } from 'react';
 import AdminUserMessages from './components/AdminUserMessages';
 import './Overview.css';
 import PageHeader from './PageHeader';
-import { fetchDashboardStats, listenToFraudAlerts, syncUserCount, debugFraudAlerts } from './utils/firebaseMessages';
+import { fetchDashboardStats, listenToFraudAlerts, syncUserCount, fetchAllSMSMessages } from './utils/firebaseMessages';
 import UserCountDebug from './components/UserCountDebug';
-import FraudMap from './components/FraudMap';
 
 const Overview = () => {
   const [dashboardStats, setDashboardStats] = useState({
@@ -26,7 +25,10 @@ const Overview = () => {
         // First sync user count to ensure accuracy, then get stats
         await syncUserCount();
         
-        const stats = await fetchDashboardStats();
+        const [stats, messages] = await Promise.all([
+          fetchDashboardStats(),
+          fetchAllSMSMessages()
+        ]);
         
         setDashboardStats(stats);
         console.log('📊 Dashboard stats loaded:', stats);
@@ -57,18 +59,7 @@ const Overview = () => {
 
     // Set up real-time listener for fraud alerts
     const unsubscribe = listenToFraudAlerts((alerts) => {
-      console.log(`📊 Dashboard received ${alerts.length} fraud alerts from Firebase (all alerts)`);
-      alerts.forEach((alert, index) => {
-        console.log(`🚨 Alert ${index + 1}: ${alert.type} - User: ${alert.userId} - ${alert.content || alert.message || 'No content'} (ID: ${alert.id})`);
-      });
-      
-      setRealtimeAlerts(alerts.slice(0, 10)); // Show up to 10 alerts instead of 5
-      console.log(`📊 Dashboard displaying ${Math.min(alerts.length, 10)} alerts (including multiple per user)`);
-    });
-
-    // Debug: Also manually fetch all fraud alerts to compare
-    debugFraudAlerts().then(allAlerts => {
-      console.log(`🔍 Manual debug found ${allAlerts.length} total fraud alerts in database`);
+      setRealtimeAlerts(alerts.slice(0, 3)); // Show only latest 3 alerts
     });
 
     return () => {
@@ -131,9 +122,6 @@ const Overview = () => {
 
       {/* Temporary Debug Component */}
       <UserCountDebug />
-
-      {/* Enhanced Proactive Fraud Map */}
-      <FraudMap />
 
       {/* Mobile App Status Section */}
       <div className="mobile-app-section" style={{ marginTop: '20px' }}>
@@ -220,27 +208,12 @@ const Overview = () => {
 
           {/* Real-time Alerts */}
           <div style={{ marginTop: '20px', background: '#fff3cd', padding: '15px', borderRadius: '8px', border: '1px solid #ffeaa7' }}>
-            <h4 style={{ color: '#856404', marginBottom: '10px' }}>⚠️ Real-time Mobile App Alerts ({realtimeAlerts.length})</h4>
+            <h4 style={{ color: '#856404', marginBottom: '10px' }}>⚠️ Real-time Mobile App Alerts</h4>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {realtimeAlerts.length > 0 ? (
                 realtimeAlerts.map(alert => (
-                  <div key={alert.id} style={{ 
-                    fontSize: '14px', 
-                    color: '#856404',
-                    padding: '8px',
-                    background: 'rgba(255, 234, 167, 0.3)',
-                    borderRadius: '4px',
-                    border: '1px solid rgba(255, 234, 167, 0.5)'
-                  }}>
-                    <div style={{ fontWeight: 'bold' }}>
-                      🚨 {alert.type} - User: {alert.userId || 'Unknown'}
-                    </div>
-                    <div style={{ marginTop: '4px' }}>
-                      📱 Message: {alert.message || alert.content || 'No message content'}
-                    </div>
-                    <div style={{ marginTop: '4px', fontSize: '12px', opacity: 0.8 }}>
-                      🕒 {alert.createdAt?.toDate ? alert.createdAt.toDate().toLocaleString() : 'Time unknown'}
-                    </div>
+                  <div key={alert.id} style={{ fontSize: '14px', color: '#856404' }}>
+                    • {alert.type}: User {alert.userId} - {alert.message || alert.content}
                   </div>
                 ))
               ) : (

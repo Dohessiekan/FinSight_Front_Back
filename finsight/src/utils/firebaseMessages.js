@@ -13,7 +13,6 @@ import {
   doc,
   getDoc,
   setDoc,
-  updateDoc,
   serverTimestamp,
   onSnapshot,
   increment
@@ -851,15 +850,142 @@ export async function fetchAllSMSMessages() {
   }
 }
 
-// Real-time listener for fraud alerts
+// Real-time listener for fraud alerts - shows ALL alerts including multiple from same user
 export function listenToFraudAlerts(callback) {
   const alertsRef = collection(db, 'fraud_alerts');
-  const q = query(alertsRef, where('status', '==', 'active'), orderBy('createdAt', 'desc'));
   
-  return onSnapshot(q, (snapshot) => {
-    const alerts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  // ULTRA-SIMPLE query - no filters, no ordering, no indexes required
+  console.log('🗺️ Setting up ULTRA-SIMPLE fraud alerts listener (no indexes needed)...');
+  
+  return onSnapshot(alertsRef, (snapshot) => {
+    console.log(`📊 Fetched ${snapshot.docs.length} fraud alerts from Firebase (SIMPLE QUERY - all documents)`);
+    
+    const alerts = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return { 
+        id: doc.id, 
+        ...data,
+        // Ensure we have a valid timestamp for sorting
+        createdAt: data.createdAt || data.timestamp || new Date()
+      };
+    }).filter(alert => {
+      // CLIENT-SIDE FILTERING: Only include active alerts
+      const isActive = !alert.status || alert.status === 'active' || alert.status === 'pending' || alert.status === 'investigating' || alert.status === 'new';
+      
+      if (!isActive) {
+        console.log(`📊 Filtering out resolved alert: ${alert.id} (status: ${alert.status})`);
+      }
+      
+      return isActive;
+    });
+    
+    // CLIENT-SIDE SORTING: Sort by creation time (most recent first)
+    alerts.sort((a, b) => {
+      const timeA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt);
+      const timeB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt);
+      return timeB - timeA; // Most recent first
+    });
+    
+    alerts.forEach(alert => {
+      console.log(`🚨 Alert: ${alert.type} - User: ${alert.userId} - ${alert.content || alert.message || 'No content'}`);
+    });
+    
+    console.log(`📊 Processed ${alerts.length} active fraud alerts (client-side filtered), sending to dashboard`);
+    console.log(`👥 Users with alerts: ${[...new Set(alerts.map(a => a.userId))].join(', ')}`);
     callback(alerts);
+  }, (error) => {
+    console.error('❌ Error with fraud alerts listener:', error);
+    // Return empty array on error
+    callback([]);
   });
+}
+
+// Debug function to fetch all fraud alerts manually
+export async function debugFraudAlerts() {
+  try {
+    const alertsRef = collection(db, 'fraud_alerts');
+    const snapshot = await getDocs(alertsRef);
+    
+    console.log(`🔍 DEBUG: Found ${snapshot.docs.length} total fraud alerts in database`);
+    
+    snapshot.docs.forEach((doc, index) => {
+      const data = doc.data();
+      console.log(`🚨 Alert ${index + 1}:`, {
+        id: doc.id,
+        type: data.type,
+        status: data.status,
+        content: data.content || data.message,
+        createdAt: data.createdAt,
+        timestamp: data.timestamp,
+        userId: data.userId
+      });
+    });
+    
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error('❌ Debug fraud alerts failed:', error);
+    return [];
+  }
+}
+
+// Function to get all fraud alerts for a specific location (for map popups)
+export async function getFraudAlertsByLocation(latitude, longitude, radiusKm = 1) {
+  try {
+    await ensureAuthenticated();
+    
+    console.log(`🗺️ Fetching fraud alerts near location: ${latitude}, ${longitude} (radius: ${radiusKm}km)`);
+    
+    const alertsRef = collection(db, 'fraud_alerts');
+    const snapshot = await getDocs(alertsRef);
+    
+    const alerts = [];
+    
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      
+      // Check if alert has location data
+      if (data.location && data.location.latitude && data.location.longitude) {
+        const distance = calculateDistance(
+          latitude, longitude,
+          data.location.latitude, data.location.longitude
+        );
+        
+        if (distance <= radiusKm) {
+          alerts.push({
+            id: doc.id,
+            ...data,
+            distance: distance.toFixed(2)
+          });
+        }
+      }
+    });
+    
+    // Sort by newest first
+    alerts.sort((a, b) => {
+      const timeA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+      const timeB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+      return timeB - timeA;
+    });
+    
+    console.log(`🗺️ Found ${alerts.length} fraud alerts within ${radiusKm}km of location`);
+    return alerts;
+    
+  } catch (error) {
+    console.error('❌ Error fetching fraud alerts by location:', error);
+    return [];
+  }
+}
+
+// Helper function to calculate distance between two points
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Radius of Earth in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
 }
 
 // Fetch dashboard statistics

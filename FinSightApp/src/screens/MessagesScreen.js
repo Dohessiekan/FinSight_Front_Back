@@ -12,6 +12,7 @@ import DashboardStatsManager from '../utils/dashboardStats';
 import SimpleIncrementalScanner from '../utils/SimpleIncrementalScanner';
 import GlobalDuplicateDetector from '../utils/GlobalDuplicateDetector';
 import MobileAlertSystem from '../utils/MobileAlertSystem';
+import MobileAdminRequestManager from '../utils/MobileAdminRequestManager';
 import SecurityScoreManager from '../utils/SecurityScoreManager';
 import UserDataManager from '../utils/UserDataManager';
 import { 
@@ -1117,6 +1118,112 @@ export default function MessagesScreen() {
         return <Ionicons name="document-text" size={20} color={colors.textSecondary} />;
     }
   };
+  
+  // Handler for requesting admin review of fraud message
+  const handleRequestAdminReview = async (message) => {
+    try {
+      Alert.alert(
+        'Request Admin Review',
+        'Do you believe this message was incorrectly classified as fraud?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Yes, Request Review',
+            onPress: async () => {
+              try {
+                setLoading(true);
+                const result = await MobileAdminRequestManager.requestFraudReview(
+                  message.id,
+                  message,
+                  user.uid,
+                  'User believes message is legitimate and not fraud'
+                );
+                
+                if (result.success) {
+                  Alert.alert(
+                    'Review Requested',
+                    'Your request has been sent to administrators. You will be notified of their decision.',
+                    [{ text: 'OK' }]
+                  );
+                  
+                  // Update message locally to show it's under review
+                  const updatedMessages = messages.map(msg => 
+                    msg.id === message.id 
+                      ? { ...msg, reviewStatus: 'pending_review' }
+                      : msg
+                  );
+                  setMessages(updatedMessages);
+                  
+                } else {
+                  Alert.alert('Error', result.error || 'Failed to send review request');
+                }
+              } catch (error) {
+                console.error('Failed to request review:', error);
+                Alert.alert('Error', 'Failed to send review request. Please try again.');
+              } finally {
+                setLoading(false);
+              }
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error in review request handler:', error);
+    }
+  };
+  
+  // Handler for blocking a fraud message
+  const handleBlockMessage = async (message) => {
+    try {
+      Alert.alert(
+        'Block Message',
+        'This will block the message and sender. Are you sure?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Block',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                setLoading(true);
+                const result = await MobileAdminRequestManager.blockMessage(
+                  message.id,
+                  message,
+                  user.uid
+                );
+                
+                if (result.success) {
+                  Alert.alert(
+                    'Message Blocked',
+                    'The message has been blocked and administrators have been notified.',
+                    [{ text: 'OK' }]
+                  );
+                  
+                  // Update message locally to show it's blocked
+                  const updatedMessages = messages.map(msg => 
+                    msg.id === message.id 
+                      ? { ...msg, status: 'blocked' }
+                      : msg
+                  );
+                  setMessages(updatedMessages);
+                  
+                } else {
+                  Alert.alert('Error', result.error || 'Failed to block message');
+                }
+              } catch (error) {
+                console.error('Failed to block message:', error);
+                Alert.alert('Error', 'Failed to block message. Please try again.');
+              } finally {
+                setLoading(false);
+              }
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error in block message handler:', error);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -1279,6 +1386,49 @@ export default function MessagesScreen() {
                 <Text style={styles.analysisText} numberOfLines={1}>
                   {item.analysis || 'No analysis available'}
                 </Text>
+              )}
+              
+              {/* Fraud Review Buttons - Only show for fraud messages */}
+              {item.status === 'fraud' && (
+                <View style={styles.fraudActionButtons}>
+                  <TouchableOpacity 
+                    style={[
+                      styles.actionButton, 
+                      styles.reviewButton,
+                      item.reviewStatus === 'pending_review' && { opacity: 0.5 }
+                    ]}
+                    onPress={() => handleRequestAdminReview(item)}
+                    disabled={item.reviewStatus === 'pending_review'}
+                  >
+                    <Ionicons 
+                      name={item.reviewStatus === 'pending_review' ? "hourglass" : "eye"} 
+                      size={16} 
+                      color="#fff" 
+                    />
+                    <Text style={styles.actionButtonText}>
+                      {item.reviewStatus === 'pending_review' ? 'Review Pending' : 'Request Review'}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={[
+                      styles.actionButton, 
+                      styles.blockButton,
+                      item.status === 'blocked' && { opacity: 0.5 }
+                    ]}
+                    onPress={() => handleBlockMessage(item)}
+                    disabled={item.status === 'blocked'}
+                  >
+                    <Ionicons 
+                      name={item.status === 'blocked' ? "checkmark-circle" : "ban"} 
+                      size={16} 
+                      color="#fff" 
+                    />
+                    <Text style={styles.actionButtonText}>
+                      {item.status === 'blocked' ? 'Blocked' : 'Block'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
           </Card>
@@ -1667,5 +1817,34 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text,
     textAlign: 'center',
+  },
+  
+  // Fraud Action Button Styles
+  fraudActionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    gap: 8,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    gap: 4,
+  },
+  reviewButton: {
+    backgroundColor: colors.primary,
+  },
+  blockButton: {
+    backgroundColor: colors.error || '#DC3545',
+  },
+  actionButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

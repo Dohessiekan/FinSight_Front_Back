@@ -41,6 +41,7 @@ const Sidebar = ({ onLogout, adminInfo }) => {
         <ul>
           <li><NavLink to="/overview" className={({ isActive }) => isActive ? "active" : ''}><img src={homeIcon} alt="Dashboard" className="nav-icon" />Dashboard</NavLink></li>
           <li><NavLink to="/fraud-alerts" className={({ isActive }) => isActive ? "active" : ''}><img src={process.env.PUBLIC_URL + '/alerts.svg'} alt="Fraud Alerts" className="nav-icon" />Fraud Alerts</NavLink></li>
+          <li><NavLink to="/admin-notifications" className={({ isActive }) => isActive ? "active" : ''}><img src={process.env.PUBLIC_URL + '/notification.svg'} alt="User Requests" className="nav-icon" />User Requests</NavLink></li>
           <li><NavLink to="/sms-inbox" className={({ isActive }) => isActive ? "active" : ''}><img src={smsIcon} alt="SMS Analysis" className="nav-icon" />SMS Analysis</NavLink></li>
           <li><NavLink to="/financial-summary" className={({ isActive }) => isActive ? "active" : ''}><img src={statsIcon} alt="Analytics" className="nav-icon" />Analytics</NavLink></li>
           <li><NavLink to="/settings" className={({ isActive }) => isActive ? "active" : ''}><img src={settingsIcon} alt="Settings" className="nav-icon" />Admin Settings</NavLink></li>

@@ -20,6 +20,7 @@ import { useAuth } from '../contexts/AuthContext';
 import FirebaseService from '../services/FirebaseService';
 import Button from '../components/Button';
 import ScreenWrapper from '../components/ScreenWrapper';
+import SimpleLocationToggle from '../components/SimpleLocationToggle';
 
 export default function ProfileScreen({ navigation }) {
   const { user, signOut } = useAuth();
@@ -373,6 +374,9 @@ export default function ProfileScreen({ navigation }) {
               <Text style={styles.infoText}>{getMemberSinceDate()}</Text>
             </View>
           </View>
+
+          {/* Location Settings */}
+          <SimpleLocationToggle />
 
           {/* Account Actions */}
           <View style={styles.section}>
