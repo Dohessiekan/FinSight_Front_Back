@@ -1013,13 +1013,21 @@ export default function DashboardScreen({ navigation }) {
       // Import SMS Service
       const SMSService = (await import('../services/SMSService')).default;
       
-      // Check permissions
+      // Check permissions with clear user messaging
+      console.log('📱 Checking SMS permissions for financial analysis...');
+      
       const hasPermissions = await SMSService.checkSMSPermissions();
       if (!hasPermissions) {
+        console.log('📱 SMS permissions needed - requesting from user...');
+        
         const granted = await SMSService.requestSMSPermissions();
         if (!granted) {
-          throw new Error('SMS permissions required to analyze transactions');
+          throw new Error(`SMS permissions are required to analyze your ${currentMonthName} transactions. Please grant SMS access in your device settings and try again.`);
         }
+        
+        console.log('✅ SMS permissions granted for financial analysis');
+      } else {
+        console.log('✅ SMS permissions already available');
       }
 
       // Get all SMS messages

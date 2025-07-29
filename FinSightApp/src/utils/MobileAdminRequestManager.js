@@ -5,7 +5,7 @@
  * Works with the web app's AdminNotificationCenter component
  */
 
-import { collection, addDoc, serverTimestamp, doc, updateDoc, increment } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, updateDoc, increment, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { UserLocationManager } from './UserLocationManager';
 import { LocationService } from '../services/LocationService';
@@ -607,8 +607,22 @@ export class MobileAdminRequestManager {
       
       console.log(`✅ Fraud review request created: ${docRef.id}`);
       
-      // Mark message as pending review
-      await this.updateMessageReviewStatus(messageId, userId, 'pending_review');
+      // Check if message exists in Firebase, if not save it first
+      try {
+        await this.ensureMessageExistsInFirebase(messageId, messageData, userId);
+        console.log(`✅ Message ${messageId} is ready in Firebase`);
+      } catch (ensureError) {
+        console.error('❌ Failed to ensure message exists in Firebase:', ensureError);
+        // Continue anyway, we'll handle the update error separately
+      }
+      
+      // Mark message as pending review (with better error handling)
+      try {
+        await this.updateMessageReviewStatus(messageId, userId, 'pending_review');
+      } catch (updateError) {
+        console.error('❌ Failed to update review status, but admin notification was sent:', updateError);
+        // Don't throw error here - the admin notification was successful
+      }
       
       // Update dashboard stats
       await this.updateDashboardStats('fraud_review_requested');
@@ -616,7 +630,8 @@ export class MobileAdminRequestManager {
       return {
         success: true,
         requestId: docRef.id,
-        message: 'Review request sent to admin. You will be notified of the decision.'
+        message: 'Review request sent to admin successfully. You will be notified of the decision.',
+        messageCreated: true
       };
       
     } catch (error) {
@@ -720,6 +735,56 @@ export class MobileAdminRequestManager {
     } catch (error) {
       console.error('❌ Failed to update review status:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Ensure message exists in Firebase before updating it
+   */
+  static async ensureMessageExistsInFirebase(messageId, messageData, userId) {
+    try {
+      console.log(`🔍 Checking if message ${messageId} exists in Firebase...`);
+      console.log('🔍 Message data:', { 
+        id: messageId, 
+        text: messageData.text?.substring(0, 50),
+        status: messageData.status,
+        sender: messageData.sender 
+      });
+      
+      const messageRef = doc(db, 'users', userId, 'messages', messageId);
+      const messageDoc = await getDoc(messageRef);
+      
+      if (!messageDoc.exists()) {
+        console.log(`📝 Message ${messageId} doesn't exist in Firebase, creating it...`);
+        
+        // Prepare message data with fallbacks
+        const messageToSave = {
+          id: messageId,
+          text: messageData.text || messageData.content || messageData.body || 'Manual entry',
+          sender: messageData.sender || messageData.address || messageData.from || 'Unknown',
+          status: messageData.status || 'manual',
+          analysis: messageData.analysis || 'Manual analysis result',
+          confidence: messageData.confidence || messageData.spamData?.confidence || 50,
+          source: 'manual_analysis',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          isManualEntry: true,
+          originalScanDate: new Date().toISOString()
+        };
+        
+        console.log('📝 Saving message to Firebase:', messageToSave);
+        
+        // Create the message document
+        await setDoc(messageRef, messageToSave);
+        
+        console.log(`✅ Message ${messageId} created successfully in Firebase`);
+      } else {
+        console.log(`✅ Message ${messageId} already exists in Firebase`);
+      }
+    } catch (error) {
+      console.error('❌ Failed to ensure message exists in Firebase:', error);
+      console.error('❌ Error details:', error.message);
+      throw new Error(`Failed to save message to Firebase: ${error.message}`);
     }
   }
   
