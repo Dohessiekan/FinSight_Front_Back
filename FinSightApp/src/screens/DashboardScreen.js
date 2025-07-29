@@ -763,10 +763,18 @@ export default function DashboardScreen({ navigation }) {
     try {
       setSecurityScoreLoading(true);
       console.log('🔒 Loading security score for user:', user.uid);
+      console.log('🔒 Force refresh:', forceRefresh);
+      
+      // If we're in fallback mode and this is a forced refresh, clear cache first
+      if (forceRefresh) {
+        console.log('🔒 Force refresh - clearing cached data...');
+        setSecurityScoreData(null);
+      }
       
       const scoreData = await SecurityScoreManager.getSecurityScore(user.uid, forceRefresh);
+      console.log('🔒 SecurityScoreManager returned:', scoreData);
       
-      if (scoreData) {
+      if (scoreData && scoreData.securityScore !== undefined) {
         setSecurityScoreData(scoreData);
         setFraudScore(100 - scoreData.securityScore); // Invert for fraudScore (higher fraud = lower security)
         
@@ -776,9 +784,38 @@ export default function DashboardScreen({ navigation }) {
         if (scoreData.securityScore < 60 && scoreData.recommendations?.length > 0) {
           console.log('⚠️ Security recommendations available:', scoreData.recommendations);
         }
+      } else {
+        console.warn('🔒 SecurityScoreManager returned invalid data, forcing calculation...');
+        // Force a fresh calculation
+        const freshScore = await SecurityScoreManager.calculateSecurityScore(user.uid);
+        console.log('🔒 Fresh calculation result:', freshScore);
+        
+        if (freshScore && freshScore.securityScore !== undefined) {
+          setSecurityScoreData(freshScore);
+          setFraudScore(100 - freshScore.securityScore);
+          console.log(`🔒 Fresh security score: ${freshScore.securityScore}/100`);
+        } else {
+          console.error('❌ Both SecurityScoreManager methods failed. Fallback to old system.');
+          // Show error to user
+          Alert.alert(
+            '⚠️ Security Score Issue',
+            'Unable to load new security system. Using fallback calculation.\n\nTap the shield button to try "Force New Calculation" for the correct score.',
+            [{ text: 'OK' }]
+          );
+        }
       }
     } catch (error) {
       console.error('❌ Failed to load security score:', error);
+      console.error('❌ Error details:', error.message);
+      console.error('❌ Error stack:', error.stack);
+      
+      // Show specific error to user
+      Alert.alert(
+        '❌ Security Score Error',
+        `Failed to load security score: ${error.message}\n\nUsing fallback calculation. Check console for details.`,
+        [{ text: 'OK' }]
+      );
+      
       // Use fallback values
       setFraudScore(15);
     } finally {
@@ -904,6 +941,9 @@ export default function DashboardScreen({ navigation }) {
         
         // If data is stale, reload security score in background
         if (userData.cached && !userData.fresh) {
+          loadSecurityScore();
+        } else {
+          // Always load security score to ensure we have the latest calculation
           loadSecurityScore();
         }
         
@@ -1330,14 +1370,53 @@ export default function DashboardScreen({ navigation }) {
         }
         
       } catch (apiError) {
-        console.error('API call failed:', apiError);
-        if (apiError.message.includes('timeout')) {
-          throw new Error('Analysis timed out. Please check your internet connection and try again.');
-        } else if (apiError.message.includes('network') || apiError.message.includes('fetch')) {
-          throw new Error('Network error. Please check your internet connection.');
+        console.error('❌ API call failed with details:', apiError);
+        console.error('❌ API Error name:', apiError.name);
+        console.error('❌ API Error message:', apiError.message);
+        console.error('❌ API Error stack:', apiError.stack);
+        
+        // More specific error messages for user
+        let userMessage = 'Analysis failed';
+        let technicalDetails = apiError.message;
+        
+        if (apiError.message.includes('timeout') || apiError.name === 'AbortError') {
+          userMessage = 'Analysis timed out - server took too long to respond';
+          technicalDetails = 'API timeout after 30 seconds';
+        } else if (apiError.message.includes('Failed to fetch') || apiError.message.includes('Network request failed')) {
+          userMessage = 'Network error - unable to connect to analysis server';
+          technicalDetails = 'Network connection failed - check internet or server status';
+        } else if (apiError.message.includes('API error: 500')) {
+          userMessage = 'Server error - analysis service is temporarily down';
+          technicalDetails = 'Internal server error (500)';
+        } else if (apiError.message.includes('API error: 404')) {
+          userMessage = 'Analysis service not found - may need app update';
+          technicalDetails = 'API endpoint not found (404)';
+        } else if (apiError.message.includes('API error: 403')) {
+          userMessage = 'Access denied to analysis service';
+          technicalDetails = 'API access forbidden (403)';
         } else {
-          throw new Error('Analysis service unavailable. Please try again later.');
+          userMessage = `Analysis service error: ${apiError.message}`;
+          technicalDetails = apiError.message;
         }
+        
+        // Show user-friendly error with option to see technical details
+        Alert.alert(
+          '❌ SMS Analysis Failed',
+          `${userMessage}\n\nWould you like to see technical details for troubleshooting?`,
+          [
+            { text: 'Just Continue', style: 'cancel' },
+            { 
+              text: 'Show Details', 
+              onPress: () => Alert.alert(
+                'Technical Error Details',
+                `Error: ${technicalDetails}\n\nAPI URL: https://finsight-front-back-2.onrender.com\n\nThis information can help developers fix the issue.`,
+                [{ text: 'OK' }]
+              )
+            }
+          ]
+        );
+        
+        throw new Error(userMessage);
       }
       
       console.log(`📊 Analysis complete: ${transactionMessages.length} transactions from ${currentMonthMessages.length} SMS messages in ${currentMonthName}`);
@@ -1460,6 +1539,47 @@ export default function DashboardScreen({ navigation }) {
       setRefreshing(false);
     }
   }, [user]);
+
+  // 🧪 TEST FUNCTION: API Connection Test
+  const testAPIConnection = async () => {
+    try {
+      Alert.alert('🧪 Testing API', 'Testing connection to analysis server...');
+      
+      console.log('🧪 Testing API connection...');
+      const testUrl = 'https://finsight-front-back-2.onrender.com';
+      
+      // Test 1: Basic connection
+      const response = await fetch(testUrl, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      console.log('🧪 API Response status:', response.status);
+      console.log('🧪 API Response headers:', response.headers);
+      
+      if (response.ok) {
+        Alert.alert(
+          '✅ API Connection Success',
+          `Server is reachable!\n\nStatus: ${response.status}\nURL: ${testUrl}\n\nThe "Get Real Summary" should work now.`,
+          [{ text: 'Try Again' }]
+        );
+      } else {
+        Alert.alert(
+          '⚠️ API Connection Issues',
+          `Server responded but with error:\n\nStatus: ${response.status}\nURL: ${testUrl}\n\nThe analysis server may be having issues.`,
+          [{ text: 'OK' }]
+        );
+      }
+      
+    } catch (error) {
+      console.error('🧪 API Test Error:', error);
+      Alert.alert(
+        '❌ API Connection Failed',
+        `Cannot reach analysis server:\n\nError: ${error.message}\nURL: https://finsight-front-back-2.onrender.com\n\nThis could be:\n• No internet connection\n• Server is down\n• App needs update`,
+        [{ text: 'OK' }]
+      );
+    }
+  };
 
   // 🧪 TEST FUNCTION: Manual Firebase User Creation Test
   const testFirebaseUserCreation = async () => {
@@ -1793,11 +1913,97 @@ export default function DashboardScreen({ navigation }) {
               style={[styles.notificationButton, { backgroundColor: colors.success, marginRight: 8 }]}
               onPress={() => {
                 Alert.alert(
-                  '🔒 Security Score Real-time Test',
-                  `Current Score: ${securityScoreData?.securityScore || (100 - fraudScore)}/100\nRisk Level: ${risk.text}\nListener Active: ${securityScoreListenerActive ? 'Yes ✅' : 'No ❌'}\n\nActions:`,
+                  '🔒 Security Score Debug',
+                  `Current Score: ${securityScoreData?.securityScore || (100 - fraudScore)}/100\nRisk Level: ${risk.text}\nListener Active: ${securityScoreListenerActive ? 'Yes ✅' : 'No ❌'}\n\n⚠️ Score Source: ${securityScoreData ? 'SecurityScoreManager ✅' : 'Old fraudScore fallback ❌'}\n${!securityScoreData ? `Old fraudScore: ${fraudScore} (Score: ${100 - fraudScore})` : ''}\n\nThreat Breakdown:\n• Confirmed Fraud Alerts: ${securityScoreData?.fraudMessages || 0}\n• Suspicious Messages: ${securityScoreData?.suspiciousMessages || 0}\n• Safe Messages: ${securityScoreData?.safeMessages || 0}\n• Total Analyzed: ${securityScoreData?.messagesAnalyzed || 0}\n• Total Threats: ${(securityScoreData?.fraudMessages || 0) + (securityScoreData?.suspiciousMessages || 0)}\n\nActions:`,
                   [
                     { text: 'Cancel', style: 'cancel' },
                     { text: 'Refresh Score', onPress: () => loadSecurityScore(true) },
+                    { 
+                      text: 'Force New Calculation', 
+                      onPress: async () => {
+                        try {
+                          setSecurityScoreLoading(true);
+                          Alert.alert('🔄 Forcing Security Score Calculation...', 'Using SecurityScoreManager directly...');
+                          
+                          const freshScore = await SecurityScoreManager.calculateSecurityScore(user.uid);
+                          console.log('🔒 Direct calculation result:', freshScore);
+                          
+                          if (freshScore && freshScore.securityScore !== undefined) {
+                            setSecurityScoreData(freshScore);
+                            setFraudScore(100 - freshScore.securityScore);
+                            
+                            setTimeout(() => {
+                              Alert.alert(
+                                '✅ Security Score Updated!',
+                                `New Score: ${freshScore.securityScore}/100\n\nFraud Alerts: ${freshScore.fraudMessages}\nSuspicious: ${freshScore.suspiciousMessages}\nSafe: ${freshScore.safeMessages}\n\nCalculation: 100 - (${freshScore.fraudMessages} × 10) - (${freshScore.suspiciousMessages} × 3) = ${freshScore.securityScore}`,
+                                [{ text: 'Great!' }]
+                              );
+                            }, 500);
+                          } else {
+                            Alert.alert('❌ Failed', 'SecurityScoreManager calculation failed');
+                          }
+                        } catch (error) {
+                          Alert.alert('❌ Error', `Calculation failed: ${error.message}`);
+                        } finally {
+                          setSecurityScoreLoading(false);
+                        }
+                      }
+                    },
+                    { 
+                      text: 'Debug Data Sources', 
+                      onPress: async () => {
+                        try {
+                          Alert.alert('🔍 Checking Data Sources...', 'Comparing user messages vs fraud alerts...');
+                          
+                          // Check user messages collection
+                          const userMessagesRef = collection(db, 'users', user.uid, 'messages');
+                          const userMessagesSnapshot = await getDocs(userMessagesRef);
+                          const userMessages = userMessagesSnapshot.docs.map(doc => doc.data());
+                          
+                          // Check fraud alerts collection  
+                          const alertsRef = collection(db, 'fraud_alerts');
+                          const alertsQuery = query(alertsRef, where('userId', '==', user.uid));
+                          const alertsSnapshot = await getDocs(alertsQuery);
+                          const fraudAlerts = alertsSnapshot.docs.map(doc => doc.data());
+                          
+                          // Count by status
+                          const fraudMessages = userMessages.filter(m => m.status === 'fraud').length;
+                          const suspiciousMessages = userMessages.filter(m => m.status === 'suspicious').length;
+                          const safeMessages = userMessages.filter(m => m.status === 'safe').length;
+                          
+                          setTimeout(() => {
+                            Alert.alert(
+                              '🔍 Data Source Comparison',
+                              `USER MESSAGES COLLECTION:\n` +
+                              `• Total Messages: ${userMessages.length}\n` +
+                              `• Fraud: ${fraudMessages} (not used for threat count)\n` +
+                              `• Suspicious: ${suspiciousMessages} (used for threat count)\n` +
+                              `• Safe: ${safeMessages}\n\n` +
+                              `FRAUD ALERTS COLLECTION:\n` +
+                              `• Total Alerts: ${fraudAlerts.length} (used for fraud threat count)\n\n` +
+                              `SECURITY SCORE CALCULATION:\n` +
+                              `• Fraud Threats: ${fraudAlerts.length} (from fraud alerts)\n` +
+                              `• Suspicious Threats: ${suspiciousMessages} (from user messages)\n` +
+                              `• Total Threats: ${fraudAlerts.length + suspiciousMessages}`,
+                              [
+                                { text: 'OK' },
+                                { 
+                                  text: 'View Details', 
+                                  onPress: () => {
+                                    console.log('🔍 USER MESSAGES:', userMessages);
+                                    console.log('🔍 FRAUD ALERTS:', fraudAlerts);
+                                    Alert.alert('Debug Data', 'Check console for detailed data logs');
+                                  }
+                                }
+                              ]
+                            );
+                          }, 500);
+                          
+                        } catch (error) {
+                          Alert.alert('❌ Debug Error', `Failed to check data sources: ${error.message}`);
+                        }
+                      }
+                    },
                     { 
                       text: 'Test Real-time', 
                       onPress: async () => {
@@ -1931,7 +2137,34 @@ export default function DashboardScreen({ navigation }) {
               )}
               
               <TouchableOpacity 
-                onPress={() => loadSecurityScore(true)}
+                onPress={async () => {
+                  try {
+                    setSecurityScoreLoading(true);
+                    
+                    // Clear any cached data first
+                    setSecurityScoreData(null);
+                    
+                    console.log('🔄 AGGRESSIVE REFRESH: Clearing all caches and forcing fresh calculation...');
+                    
+                    // Force fresh calculation directly
+                    const freshScore = await SecurityScoreManager.calculateSecurityScore(user.uid);
+                    console.log('🔒 Aggressive refresh result:', freshScore);
+                    
+                    if (freshScore && freshScore.securityScore !== undefined) {
+                      setSecurityScoreData(freshScore);
+                      setFraudScore(100 - freshScore.securityScore);
+                      console.log(`🔒 Score updated to: ${freshScore.securityScore}/100`);
+                    } else {
+                      console.error('❌ Fresh calculation returned invalid data:', freshScore);
+                      // Try the old method as fallback
+                      await loadSecurityScore(true);
+                    }
+                  } catch (error) {
+                    console.error('❌ Aggressive refresh failed:', error);
+                  } finally {
+                    setSecurityScoreLoading(false);
+                  }
+                }}
                 style={styles.refreshScoreButton}
                 disabled={securityScoreLoading}
               >
@@ -1964,13 +2197,52 @@ export default function DashboardScreen({ navigation }) {
                 ]} 
               />
             </View>
+            
+            {/* Auto-load security score if not available */}
+            {!securityScoreData && !securityScoreLoading && (
+              <TouchableOpacity 
+                style={styles.autoLoadButton}
+                onPress={async () => {
+                  try {
+                    setSecurityScoreLoading(true);
+                    Alert.alert('🔄 Loading New Security System...', 'Calculating your real security score...');
+                    
+                    // Direct calculation bypassing all caches
+                    const directScore = await SecurityScoreManager.calculateSecurityScore(user.uid);
+                    console.log('🔒 Direct score calculation result:', directScore);
+                    
+                    if (directScore && directScore.securityScore !== undefined) {
+                      setSecurityScoreData(directScore);
+                      setFraudScore(100 - directScore.securityScore);
+                      
+                      setTimeout(() => {
+                        Alert.alert(
+                          '✅ Success!',
+                          `Your real security score is ${directScore.securityScore}/100\n\nBased on:\n• ${directScore.fraudMessages} fraud alerts (-${directScore.fraudMessages * 10}%)\n• ${directScore.suspiciousMessages} suspicious messages (-${directScore.suspiciousMessages * 3}%)\n\nFinal: 100 - ${(directScore.fraudMessages * 10) + (directScore.suspiciousMessages * 3)} = ${directScore.securityScore}%`,
+                          [{ text: 'Perfect!' }]
+                        );
+                      }, 500);
+                    } else {
+                      Alert.alert('❌ Failed', 'Could not calculate security score. Check console for errors.');
+                    }
+                  } catch (error) {
+                    console.error('❌ Direct calculation error:', error);
+                    Alert.alert('❌ Error', `Failed: ${error.message}`);
+                  } finally {
+                    setSecurityScoreLoading(false);
+                  }
+                }}
+              >
+                <Text style={styles.autoLoadText}>🔄 Tap to load new security system</Text>
+              </TouchableOpacity>
+            )}
           </View>
           
           <Text style={styles.scoreDescription}>
             {securityScoreData ? (
-              `Based on analysis of ${securityScoreData.messagesAnalyzed} messages. ${securityScoreData.fraudMessages + securityScoreData.suspiciousMessages} threats detected.${securityScoreListenerActive ? ' 🔄 Real-time updates active' : ''}`
+              `✅ Security analysis complete${securityScoreListenerActive ? ' • Real-time monitoring active' : ''}`
             ) : (
-              `Your account is ${risk.text.toLowerCase()}. ${fraudScore > 0 && `${fraudScore} potential threats detected.`}${securityScoreListenerActive ? ' 🔄 Real-time updates active' : ''}`
+              `⚠️ Calculating your security score...${securityScoreListenerActive ? ' • Real-time monitoring active' : ''}`
             )}
           </Text>
           
@@ -2115,6 +2387,30 @@ export default function DashboardScreen({ navigation }) {
                 <MaterialIcons name="refresh" size={14} color={colors.primary} />
                 <Text style={styles.retryButtonText}>
                   {apiLoading ? 'Retrying...' : 'Retry'}
+                </Text>
+              </TouchableOpacity>
+              
+              {/* API Test Button */}
+              <TouchableOpacity
+                style={{
+                  backgroundColor: '#007AFF',
+                  padding: 8,
+                  borderRadius: 6,
+                  marginTop: 8,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+                onPress={testAPIConnection}
+              >
+                <MaterialIcons name="wifi-protected-setup" size={16} color="white" />
+                <Text style={{
+                  color: 'white',
+                  marginLeft: 4,
+                  fontSize: 12,
+                  fontWeight: '600'
+                }}>
+                  Test API Connection
                 </Text>
               </TouchableOpacity>
             </View>

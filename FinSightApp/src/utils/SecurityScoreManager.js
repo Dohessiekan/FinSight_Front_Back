@@ -11,14 +11,14 @@ class SecurityScoreManager {
   
   // Security score calculation weights
   static SCORE_WEIGHTS = {
-    fraudMessages: -15,        // High penalty for fraud messages
-    suspiciousMessages: -8,    // Medium penalty for suspicious messages
-    safeMessages: +2,          // Small bonus for safe messages
-    recentFraud: -20,          // Extra penalty for recent fraud (last 7 days)
-    scanFrequency: +5,         // Bonus for regular scanning
-    messageVolume: -1,         // Small penalty for high message volume (per 100 messages)
-    alertResponse: +3,         // Bonus for responding to alerts appropriately
-    baseScore: 85              // Starting security score
+    fraudMessages: -10,        // 10% penalty per fraud alert (confirmed fraud)
+    suspiciousMessages: -3,    // Small penalty for suspicious messages
+    safeMessages: 0,           // No penalty for safe messages (neutral)
+    recentFraud: -5,           // Extra penalty for recent fraud (last 7 days)
+    scanFrequency: +2,         // Small bonus for regular scanning
+    messageVolume: 0,          // No penalty for message volume
+    alertResponse: +1,         // Small bonus for responding to alerts
+    baseScore: 100             // Starting at perfect security (100%)
   };
   
   // Risk thresholds
@@ -59,15 +59,26 @@ class SecurityScoreManager {
       score += messageScores.safeBonus;
       score += messageScores.volumeImpact;
       
-      scoreBreakdown.fraudPenalty = messageScores.fraudPenalty;
+      // 1.1 Calculate fraud alerts penalty (main penalty source)
+      const fraudAlertsPenalty = alertsData.total * this.SCORE_WEIGHTS.fraudMessages; // -10% per fraud alert
+      score += fraudAlertsPenalty;
+      
+      console.log(`🔒 SCORE DEBUG: Base=${this.SCORE_WEIGHTS.baseScore}, Fraud Alerts=${alertsData.total} × ${this.SCORE_WEIGHTS.fraudMessages} = ${fraudAlertsPenalty}`);
+      console.log(`🔒 SCORE DEBUG: After fraud alerts penalty: ${score}`);
+      
+      scoreBreakdown.fraudPenalty = fraudAlertsPenalty; // Show fraud alerts penalty, not user messages
       scoreBreakdown.suspiciousPenalty = messageScores.suspiciousPenalty;
       scoreBreakdown.safeBonus = messageScores.safeBonus;
       scoreBreakdown.messageVolumeImpact = messageScores.volumeImpact;
       
-      // 2. Calculate recent fraud penalty
-      const recentFraudPenalty = this.calculateRecentFraudPenalty(alertsData);
+      // 2. Calculate recent fraud penalty (DISABLED - would double count same alerts)
+      // const recentFraudPenalty = this.calculateRecentFraudPenalty(alertsData);
+      const recentFraudPenalty = 0; // DISABLED to avoid double counting fraud alerts
       score += recentFraudPenalty;
       scoreBreakdown.recentFraudPenalty = recentFraudPenalty;
+      
+      console.log(`🔒 SCORE DEBUG: Recent fraud penalty disabled (was double counting): ${recentFraudPenalty}`);
+      console.log(`🔒 SCORE DEBUG: After recent fraud penalty: ${score}`);
       
       // 3. Calculate scan frequency bonus
       const scanBonus = this.calculateScanFrequencyBonus(scanHistory);
@@ -87,8 +98,8 @@ class SecurityScoreManager {
         riskLevel,
         scoreBreakdown,
         messagesAnalyzed: messagesData.total,
-        fraudMessages: messagesData.fraud,
-        suspiciousMessages: messagesData.suspicious,
+        fraudMessages: alertsData.total, // Use fraud alerts count instead of user messages fraud count
+        suspiciousMessages: messagesData.suspicious, // Keep suspicious from user messages
         safeMessages: messagesData.safe,
         recentAlerts: alertsData.recentCount,
         lastCalculated: new Date().toISOString(),
@@ -202,15 +213,17 @@ class SecurityScoreManager {
    * Calculate score adjustments based on message analysis
    */
   static calculateMessageScores(messagesData) {
-    const fraudPenalty = messagesData.fraud * this.SCORE_WEIGHTS.fraudMessages;
-    const suspiciousPenalty = messagesData.suspicious * this.SCORE_WEIGHTS.suspiciousMessages;
-    const safeBonus = Math.min(messagesData.safe * this.SCORE_WEIGHTS.safeMessages, 15); // Cap safe bonus
+    // No penalty for fraud from user messages (we use fraud alerts instead)
+    const fraudPenalty = 0; // Fraud penalty comes from alerts, not user messages
     
-    // Volume impact: slight penalty for very high message counts
-    const volumeImpact = Math.max(
-      Math.floor(messagesData.total / 100) * this.SCORE_WEIGHTS.messageVolume,
-      -10 // Cap volume penalty
-    );
+    // Small penalty for suspicious messages
+    const suspiciousPenalty = messagesData.suspicious * this.SCORE_WEIGHTS.suspiciousMessages;
+    
+    // No bonus for safe messages (neutral)
+    const safeBonus = 0;
+    
+    // No volume impact
+    const volumeImpact = 0;
     
     return {
       fraudPenalty,
@@ -226,11 +239,10 @@ class SecurityScoreManager {
   static calculateRecentFraudPenalty(alertsData) {
     if (alertsData.recentCount === 0) return 0;
     
-    // Progressive penalty for multiple recent alerts
-    const basePenalty = Math.min(alertsData.recentCount, 3) * this.SCORE_WEIGHTS.recentFraud;
-    const extraPenalty = Math.max(alertsData.recentCount - 3, 0) * (this.SCORE_WEIGHTS.recentFraud / 2);
+    // Lighter penalty for recent alerts (5% per recent alert, max 15%)
+    const recentPenalty = Math.min(alertsData.recentCount * this.SCORE_WEIGHTS.recentFraud, -15);
     
-    return basePenalty + extraPenalty;
+    return recentPenalty;
   }
   
   /**
@@ -242,12 +254,12 @@ class SecurityScoreManager {
     const recentScans = scanHistory.recentScans || 0;
     const totalScans = scanHistory.totalScans || 0;
     
-    // Bonus for recent activity
-    let bonus = Math.min(recentScans * this.SCORE_WEIGHTS.scanFrequency, 15);
+    // Small bonus for recent activity (max 5%)
+    let bonus = Math.min(recentScans * this.SCORE_WEIGHTS.scanFrequency, 5);
     
-    // Additional bonus for consistent scanning over time
-    if (totalScans >= 10) bonus += 5;
-    if (totalScans >= 20) bonus += 5;
+    // Small additional bonus for consistent scanning over time (max 3%)
+    if (totalScans >= 10) bonus += 1;
+    if (totalScans >= 20) bonus += 2;
     
     return bonus;
   }
@@ -282,20 +294,27 @@ class SecurityScoreManager {
   static generateSecurityRecommendations(score, breakdown) {
     const recommendations = [];
     
-    if (breakdown.fraudPenalty < -20) {
+    if (breakdown.fraudPenalty <= -30) { // 3+ fraud alerts
+      recommendations.push({
+        priority: 'high',
+        type: 'multiple_fraud',
+        message: 'Multiple fraud alerts detected. Your security is at risk.',
+        action: 'Review all fraud alerts and secure your accounts immediately'
+      });
+    } else if (breakdown.fraudPenalty <= -10) { // 1+ fraud alerts
       recommendations.push({
         priority: 'high',
         type: 'fraud_detected',
-        message: 'Multiple fraud messages detected. Review and delete suspicious SMS immediately.',
-        action: 'Review fraud alerts and block suspicious senders'
+        message: 'Fraud alert detected. Monitor your accounts closely.',
+        action: 'Review fraud alerts and verify account security'
       });
     }
     
-    if (breakdown.recentFraudPenalty < -15) {
+    if (breakdown.recentFraudPenalty <= -10) { // 2+ recent alerts
       recommendations.push({
         priority: 'high',
         type: 'recent_threats',
-        message: 'Recent security threats detected. Monitor your accounts closely.',
+        message: 'Recent security threats detected. Take immediate action.',
         action: 'Check bank accounts and change passwords if needed'
       });
     }
@@ -309,12 +328,19 @@ class SecurityScoreManager {
       });
     }
     
-    if (score >= 80) {
+    if (score >= 90) {
+      recommendations.push({
+        priority: 'low',
+        type: 'excellent_security',
+        message: 'Excellent security! No fraud detected.',
+        action: 'Continue regular monitoring to maintain perfect security'
+      });
+    } else if (score >= 70) {
       recommendations.push({
         priority: 'low',
         type: 'good_security',
-        message: 'Excellent security score! Keep up the good security practices.',
-        action: 'Continue regular monitoring and scanning'
+        message: 'Good security score. Minor issues detected.',
+        action: 'Continue monitoring and address any suspicious messages'
       });
     }
     
