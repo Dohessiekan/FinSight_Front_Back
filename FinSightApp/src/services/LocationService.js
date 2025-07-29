@@ -288,7 +288,6 @@ export class LocationService {
         }
       }
       
-      // Final accuracy classification
       const accuracyLevel = bestAccuracy <= 2 ? 'STREET_LEVEL_ULTRA' :
                            bestAccuracy <= 3 ? 'STREET_LEVEL' :
                            bestAccuracy <= 5 ? 'BUILDING_LEVEL' :
@@ -297,6 +296,84 @@ export class LocationService {
       
       const canSeeStreets = bestAccuracy <= 5;
       const canSeeBuildings = bestAccuracy <= 3;
+      
+      // Get real address using reverse geocoding
+      updateProgress('🌍 Getting real location address...');
+      let realAddress = null;
+      let locationDetails = {};
+      
+      try {
+        const reverseGeocode = await Location.reverseGeocodeAsync({
+          latitude: bestLocation.coords.latitude,
+          longitude: bestLocation.coords.longitude
+        });
+        
+        if (reverseGeocode && reverseGeocode.length > 0) {
+          const location = reverseGeocode[0];
+          
+          // Extract location components
+          const streetNumber = location.streetNumber || '';
+          const street = location.street || '';
+          const district = location.district || location.subregion || '';
+          const city = location.city || location.region || '';
+          const country = location.country || 'Rwanda';
+          
+          // Build comprehensive address
+          const addressParts = [];
+          
+          if (streetNumber && street) {
+            addressParts.push(`${streetNumber} ${street}`);
+          } else if (street) {
+            addressParts.push(street);
+          }
+          
+          if (district && district !== city) {
+            addressParts.push(district);
+          }
+          
+          if (city) {
+            addressParts.push(city);
+          }
+          
+          if (country) {
+            addressParts.push(country);
+          }
+          
+          realAddress = addressParts.join(', ');
+          
+          // Store detailed location information
+          locationDetails = {
+            streetNumber: streetNumber,
+            street: street,
+            district: district,
+            city: city || 'Kigali', // Default to Kigali for Rwanda
+            country: country || 'Rwanda',
+            region: location.region,
+            postalCode: location.postalCode,
+            isoCountryCode: location.isoCountryCode || 'RW',
+            formattedAddress: realAddress
+          };
+          
+          updateProgress(`📍 Real Address: ${realAddress}`);
+          console.log('🌍 Complete location details:', locationDetails);
+        } else {
+          console.log('⚠️ Reverse geocoding returned no results');
+          realAddress = `Coordinates: ${bestLocation.coords.latitude.toFixed(6)}, ${bestLocation.coords.longitude.toFixed(6)}`;
+          locationDetails = {
+            city: 'Unknown Location',
+            country: 'Rwanda',
+            formattedAddress: realAddress
+          };
+        }
+      } catch (geocodeError) {
+        console.error('❌ Reverse geocoding failed:', geocodeError);
+        realAddress = `Coordinates: ${bestLocation.coords.latitude.toFixed(6)}, ${bestLocation.coords.longitude.toFixed(6)}`;
+        locationDetails = {
+          city: 'Geocoding Failed',
+          country: 'Rwanda', 
+          formattedAddress: realAddress
+        };
+      }
       
       updateProgress(`🏆 FINAL RESULT: ${accuracyLevel} accuracy achieved!`);
       
@@ -324,7 +401,16 @@ export class LocationService {
           canSeeBuildings,
           totalReadings: readings.length,
           improvementFactor: readings.length >= 3 ? '30% better accuracy' : 'single reading',
-          precisionRating: accuracyLevel
+          precisionRating: accuracyLevel,
+          // Real address information for admin display
+          realAddress: realAddress,
+          locationDetails: locationDetails,
+          displayAddress: realAddress || `GPS: ${bestLocation.coords.latitude.toFixed(6)}, ${bestLocation.coords.longitude.toFixed(6)}`,
+          adminDisplayName: locationDetails.formattedAddress || `Unknown Location (±${bestAccuracy.toFixed(1)}m)`,
+          city: locationDetails.city || 'Unknown',
+          country: locationDetails.country || 'Rwanda',
+          district: locationDetails.district || '',
+          street: locationDetails.street || ''
         }
       };
       

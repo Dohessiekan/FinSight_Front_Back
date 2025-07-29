@@ -15,6 +15,7 @@ import MobileAlertSystem from '../utils/MobileAlertSystem';
 import MobileAdminRequestManager from '../utils/MobileAdminRequestManager';
 import SecurityScoreManager from '../utils/SecurityScoreManager';
 import UserDataManager from '../utils/UserDataManager';
+import { LocationService } from '../services/LocationService';
 import { 
   collection, 
   doc, 
@@ -39,6 +40,10 @@ if (Platform.OS === 'android') {
     SmsAndroid = null;
   }
 }
+
+// GPS Permission constants
+const GPS_PERMISSION_KEY = '@gps_permission_requested';
+const GPS_FIRST_SIGNIN_KEY = '@gps_first_signin_done';
 
 // Utility function to extract financial information from SMS messages
 const extractFinancialInfo = (messageText) => {
@@ -255,6 +260,8 @@ export default function MessagesScreen() {
   const [manualInput, setManualInput] = useState('');
   const [manualLoading, setManualLoading] = useState(false);
   const [manualResult, setManualResult] = useState(null);
+  const [gpsPermissionGranted, setGpsPermissionGranted] = useState(false);
+  const [hasRequestedGpsOnFirstSignin, setHasRequestedGpsOnFirstSignin] = useState(false);
 
   // Cache keys for offline storage
   const MESSAGES_CACHE_KEY = `messages_${user?.uid || 'guest'}`;
@@ -568,6 +575,106 @@ export default function MessagesScreen() {
     }
   };
 
+  // GPS permission handling functions
+  const checkGpsPermissionStatus = async () => {
+    try {
+      const hasPermission = await LocationService.hasLocationPermission();
+      setGpsPermissionGranted(hasPermission);
+      
+      // Check if we've already requested GPS on first signin
+      const hasRequested = await AsyncStorage.getItem(GPS_FIRST_SIGNIN_KEY);
+      setHasRequestedGpsOnFirstSignin(!!hasRequested);
+    } catch (error) {
+      console.error('Error checking GPS permission status:', error);
+    }
+  };
+
+  const checkFirstSigninGpsPermission = async () => {
+    try {
+      if (!user) return;
+      
+      // Check if this is the first time signing in and we haven't asked for GPS permission yet
+      const hasRequestedGps = await AsyncStorage.getItem(GPS_FIRST_SIGNIN_KEY);
+      
+      if (!hasRequestedGps) {
+        console.log('🎯 First sign-in detected - requesting GPS permission...');
+        await requestFirstSigninGpsPermission();
+      } else {
+        console.log('✅ GPS permission already requested on previous sign-in');
+      }
+    } catch (error) {
+      console.error('Error checking first signin GPS permission:', error);
+    }
+  };
+
+  const requestFirstSigninGpsPermission = async () => {
+    return new Promise((resolve) => {
+      Alert.alert(
+        'Location Permission',
+        'FinSight uses GPS location to map fraud alerts and provide better security insights.\n\n' +
+        '🗺️ GPS ENABLED: Fraud alerts will appear on security map with precise location\n' +
+        '❌ GPS DISABLED: Limited fraud mapping capabilities\n\n' +
+        'Would you like to enable GPS for enhanced fraud protection?',
+        [
+          {
+            text: 'Not Now',
+            style: 'cancel',
+            onPress: async () => {
+              console.log('📍 User declined GPS permission on first sign-in');
+              setGpsPermissionGranted(false);
+              // Mark that we've asked (even though declined)
+              await AsyncStorage.setItem(GPS_FIRST_SIGNIN_KEY, 'requested_declined');
+              resolve(false);
+            }
+          },
+          {
+            text: 'Enable GPS',
+            onPress: async () => {
+              console.log('🎯 User wants to enable GPS - requesting permission...');
+              const permissionResult = await LocationService.requestLocationPermission();
+              
+              if (permissionResult.granted) {
+                console.log('✅ GPS permission granted on first sign-in');
+                setGpsPermissionGranted(true);
+                await AsyncStorage.setItem(GPS_FIRST_SIGNIN_KEY, 'requested_granted');
+                
+                Alert.alert(
+                  'GPS Enabled!',
+                  '🗺️ Fraud alerts will now appear on the security map with precise locations.\n\n' +
+                  'You can start scanning SMS messages for fraud detection.',
+                  [{ text: 'Got it!' }]
+                );
+              } else {
+                console.log('❌ GPS permission denied on first sign-in');
+                setGpsPermissionGranted(false);
+                await AsyncStorage.setItem(GPS_FIRST_SIGNIN_KEY, 'requested_denied');
+                
+                Alert.alert(
+                  'GPS Permission Denied',
+                  'GPS location was not granted. You can still use fraud detection, but alerts won\'t appear on the map.\n\n' +
+                  'You can enable GPS later in device settings.',
+                  [{ text: 'OK' }]
+                );
+              }
+              resolve(permissionResult.granted);
+            }
+          }
+        ]
+      );
+    });
+  };
+
+  useEffect(() => {
+    if (user) {
+      checkFirstSigninGpsPermission();
+    }
+  }, [user]);
+
+  // Check GPS permission status on mount
+  useEffect(() => {
+    checkGpsPermissionStatus();
+  }, []);
+
   useEffect(() => {
     // Initialize dashboard stats and enable Firebase listener to load existing messages
     if (user) {
@@ -607,6 +714,71 @@ export default function MessagesScreen() {
     if (!user) {
       Alert.alert('Authentication Required', 'Please sign in to scan messages');
       return;
+    }
+
+    // Check GPS permission before scanning
+    const hasGpsPermission = await LocationService.hasLocationPermission();
+    
+    if (!hasGpsPermission) {
+      // Ask for GPS permission before proceeding with scan
+      const shouldRequestGps = await new Promise((resolve) => {
+        Alert.alert(
+          'GPS Permission Required',
+          'GPS location is needed to map fraud alerts and provide better security insights.\n\n' +
+          '🗺️ GPS ENABLED: Fraud alerts will appear on security map\n' +
+          '❌ GPS DISABLED: Scan will be cancelled\n\n' +
+          'Would you like to enable GPS to continue?',
+          [
+            {
+              text: 'Cancel Scan',
+              style: 'cancel',
+              onPress: () => resolve(false)
+            },
+            {
+              text: 'Enable GPS',
+              onPress: () => resolve(true)
+            }
+          ]
+        );
+      });
+
+      if (!shouldRequestGps) {
+        console.log('📍 User cancelled scan due to GPS permission');
+        Alert.alert(
+          'Scan Cancelled',
+          'SMS scan was cancelled because GPS permission is required for fraud mapping.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // Request GPS permission
+      console.log('🎯 Requesting GPS permission before scan...');
+      const permissionResult = await LocationService.requestLocationPermission();
+      
+      if (!permissionResult.granted) {
+        console.log('❌ GPS permission denied - cancelling scan');
+        Alert.alert(
+          'Scan Cancelled',
+          'GPS permission was denied. SMS scan cancelled.\n\n' +
+          'Enable GPS in device settings to use fraud mapping features.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      console.log('✅ GPS permission granted - proceeding with scan');
+      setGpsPermissionGranted(true);
+      
+      Alert.alert(
+        'GPS Enabled!',
+        '🗺️ GPS permission granted! Fraud alerts will now appear on the security map.\n\n' +
+        'Starting SMS scan...',
+        [{ text: 'Continue' }]
+      );
+    } else {
+      console.log('✅ GPS permission already granted - proceeding with scan');
+      setGpsPermissionGranted(true);
     }
 
     setLoading(true);
@@ -1062,34 +1234,45 @@ export default function MessagesScreen() {
             accuracy: gpsResult.location.accuracy,
             isRealGPS: true,
             source: 'ULTRA_HIGH_PRECISION_GPS',
-            address: `Manual Input - Ultra Precision GPS (±${gpsResult.location.accuracy.toFixed(1)}m)`,
-            city: 'Rwanda',
+            address: gpsResult.location.displayAddress || `Manual Input - Ultra Precision GPS (±${gpsResult.location.accuracy.toFixed(1)}m)`,
+            realAddress: gpsResult.location.realAddress,
+            adminDisplayName: gpsResult.location.adminDisplayName,
+            city: gpsResult.location.city || 'Rwanda',
+            country: gpsResult.location.country || 'Rwanda',
+            district: gpsResult.location.district || '',
+            street: gpsResult.location.street || '',
+            locationDetails: gpsResult.location.locationDetails || {},
             canSeeStreets: gpsResult.location.canSeeStreets,
             canSeeBuildings: gpsResult.location.canSeeBuildings,
             precisionLevel: gpsResult.location.accuracyLevel
           };
           
-          console.log(`🏆 Got ULTRA-HIGH PRECISION GPS: ${realLocation.latitude}, ${realLocation.longitude} (±${realLocation.accuracy.toFixed(1)}m)`);
+          console.log(`🏆 Got ULTRA-HIGH PRECISION GPS with REAL ADDRESS: ${realLocation.realAddress || 'Address not available'}`);
+          console.log(`🌍 Admin will see: ${realLocation.adminDisplayName || 'Location not available'}`);
+          console.log(`📍 Location: ${realLocation.city}, ${realLocation.district}, ${realLocation.country}`);
           
           if (realLocation.canSeeBuildings) {
             console.log('🏢 STREET-LEVEL ACCURACY: You can see individual buildings!');
             Alert.alert(
               'Street-Level GPS Ready!', 
+              (realLocation.realAddress ? `Real Address: ${realLocation.realAddress}\n\n` : '') +
               `Location accuracy: ±${realLocation.accuracy.toFixed(1)}m\n\n` +
-              'You can now see individual buildings and streets on the security map!\n\n' +
+              'Admins will see the exact address on the security map!\n\n' +
               'Starting fraud analysis...'
             );
           } else if (realLocation.canSeeStreets) {
             console.log('�️ HIGH PRECISION: You can see streets and landmarks!');
             Alert.alert(
               'High Precision GPS Ready!', 
+              (realLocation.realAddress ? `Real Address: ${realLocation.realAddress}\n\n` : '') +
               `Location accuracy: ±${realLocation.accuracy.toFixed(1)}m\n\n` +
-              'You can see streets and major landmarks on the security map!\n\n' +
+              'Admins will see the street address on the security map!\n\n' +
               'Starting fraud analysis...'
             );
           } else {
             Alert.alert(
               'GPS Ready!', 
+              (realLocation.realAddress ? `Real Address: ${realLocation.realAddress}\n\n` : '') +
               `Location accuracy: ±${realLocation.accuracy.toFixed(1)}m\n\n` +
               'Starting fraud analysis...'
             );
@@ -1153,12 +1336,14 @@ export default function MessagesScreen() {
         processed: true
       };
       
-      // Save the analyzed message to Firebase and display in UI
+      // Save the analyzed message to Firebase - Firebase listener will add it to UI automatically
       try {
         await saveMessageToFirebase(analyzedMessage);
-        console.log('✅ Saved manual message to Firebase');
+        console.log('✅ Saved manual message to Firebase - will appear in UI via Firebase listener');
       } catch (error) {
         console.error('❌ Failed to save manual message:', error);
+        // If Firebase save fails, add to UI manually as fallback
+        setMessages(prevMessages => [analyzedMessage, ...prevMessages]);
       }
 
       // Create fraud alert if fraud or suspicious message detected (for map display)
@@ -1166,112 +1351,20 @@ export default function MessagesScreen() {
         try {
           console.log('🚨 Creating fraud alert for manual analysis result...');
           
-          let realLocation = null;
-          if (locationChoice !== 'none') {
-            console.log(`📍 User selected: ${locationChoice} GPS precision`);
-            
-            try {
-              // Import LocationService for real GPS (FIXED PATH)
-              const { LocationService } = await import('../services/LocationService');
-              
-              if (locationChoice === 'ultra') {
-                console.log('🎯 Starting ULTRA-HIGH PRECISION GPS for street-level accuracy...');
-                
-                // Show progress alert for ultra-high precision
-                Alert.alert(
-                  'High Precision GPS',
-                  'Getting street-level GPS accuracy...\n\nThis may take 30-60 seconds for optimal precision.\n\nFor best results:\n• Go outdoors or near a window\n• Keep device still during scanning',
-                  [{ text: 'OK' }]
-                );
-                
-                const gpsResult = await LocationService.getUltraHighPrecisionGPS((progress, accuracy) => {
-                  console.log(`📡 GPS Progress: ${progress}`);
-                  if (accuracy) {
-                    console.log(`📍 Current accuracy: ±${accuracy.toFixed(1)}m`);
-                  }
-                });
-                
-                if (gpsResult.success) {
-                  realLocation = {
-                    latitude: gpsResult.location.latitude,
-                    longitude: gpsResult.location.longitude,
-                    accuracy: gpsResult.location.accuracy,
-                    isRealGPS: true,
-                    source: 'ULTRA_HIGH_PRECISION_GPS',
-                    address: `Manual Input - Ultra Precision GPS (±${gpsResult.location.accuracy.toFixed(1)}m)`,
-                    city: 'Rwanda',
-                    canSeeStreets: gpsResult.location.canSeeStreets,
-                    canSeeBuildings: gpsResult.location.canSeeBuildings,
-                    precisionLevel: gpsResult.location.accuracyLevel
-                  };
-                  
-                  console.log(`🏆 Got ULTRA-HIGH PRECISION GPS: ${realLocation.latitude}, ${realLocation.longitude} (±${realLocation.accuracy.toFixed(1)}m)`);
-                  
-                  if (realLocation.canSeeBuildings) {
-                    console.log('🏢 STREET-LEVEL ACCURACY: You can see individual buildings!');
-                    Alert.alert('Street-Level GPS Achieved!', `Location accuracy: ±${realLocation.accuracy.toFixed(1)}m\n\nYou can now see individual buildings and streets on the security map!`);
-                  } else if (realLocation.canSeeStreets) {
-                    console.log('�️ HIGH PRECISION: You can see streets and landmarks!');
-                    Alert.alert('High Precision GPS Achieved!', `Location accuracy: ±${realLocation.accuracy.toFixed(1)}m\n\nYou can see streets and major landmarks on the security map!`);
-                  }
-                } else {
-                  console.log('❌ Ultra-high precision GPS failed, falling back to standard GPS');
-                  Alert.alert('GPS Issue', gpsResult.fallbackMessage || 'High precision GPS failed. Using standard GPS instead.');
-                }
-              }
-              
-              // If ultra-precision failed or user chose standard, use standard GPS
-              if (!realLocation && locationChoice === 'standard') {
-                console.log('📍 Using standard high-accuracy GPS...');
-                const gpsResult = await LocationService.getGPSLocation();
-                
-                if (gpsResult.success && gpsResult.location.isGPSAccurate) {
-                  realLocation = {
-                    latitude: gpsResult.location.latitude,
-                    longitude: gpsResult.location.longitude,
-                    accuracy: gpsResult.location.accuracy,
-                    isRealGPS: true,
-                    source: 'GPS_SATELLITE',
-                    address: `Manual Input - Standard GPS (±${gpsResult.location.accuracy.toFixed(1)}m)`,
-                    city: 'Rwanda',
-                    precisionLevel: gpsResult.location.accuracyLevel
-                  };
-                  console.log(`✅ Got STANDARD GPS: ${realLocation.latitude}, ${realLocation.longitude} (±${realLocation.accuracy.toFixed(1)}m)`);
-                } else if (gpsResult.success) {
-                  // GPS was obtained but accuracy is low - still mark as real GPS attempt
-                  realLocation = {
-                    latitude: gpsResult.location.latitude,
-                    longitude: gpsResult.location.longitude,
-                    accuracy: gpsResult.location.accuracy,
-                    isRealGPS: true,
-                    source: 'GPS_LOW_ACCURACY',
-                    address: `Manual Input - GPS Low Accuracy (±${gpsResult.location.accuracy.toFixed(1)}m)`,
-                    city: 'Rwanda',
-                    precisionLevel: 'LOW_ACCURACY'
-                  };
-                  console.log(`⚠️ Got low-accuracy GPS: ${realLocation.latitude}, ${realLocation.longitude} (±${realLocation.accuracy.toFixed(1)}m)`);
-                }
-              }
-              
-              if (!realLocation) {
-                console.log('❌ All GPS requests failed, manual analysis will use default location (will not appear on map)');
-                Alert.alert('GPS Failed', 'Could not get GPS location. The fraud alert will not appear on the map.\n\nTry moving outdoors or near a window for better GPS reception.');
-              }
-              
-            } catch (gpsError) {
-              console.error('❌ GPS error for manual analysis:', gpsError);
-              console.log('⚠️ Manual analysis will use default location (will not appear on map)');
-              Alert.alert('GPS Error', 'GPS location failed. The fraud alert will not appear on the map.');
-            }
+          // Use the realLocation that was already obtained earlier in the function if GPS was used
+          if (useGPS && realLocation) {
+            console.log(`🗺️ Using previously obtained GPS location for fraud alert: ${realLocation.latitude}, ${realLocation.longitude} (±${realLocation.accuracy.toFixed(1)}m)`);
+          } else if (useGPS && !realLocation) {
+            console.log('⚠️ GPS was requested but failed - fraud alert will not appear on map');
           } else {
-            console.log('📍 User declined location sharing - fraud alert will not appear on map');
+            console.log('📍 User declined GPS - fraud alert will not appear on map');
           }
           
           const alertResult = await MobileAlertSystem.createFraudAlert(
             analyzedMessage, 
             user.uid, 
             { confidence, label, category: 'Manual Analysis' },
-            realLocation  // Pass real GPS location
+            realLocation  // Pass real GPS location (null if GPS not used or failed)
           );
           
           if (alertResult.success) {
@@ -1288,7 +1381,7 @@ export default function MessagesScreen() {
         }
       }
       
-      setMessages(prevMessages => [analyzedMessage, ...prevMessages]);
+      // Don't add to UI state here - let Firebase listener handle it to avoid duplicates
       setManualResult(analyzedMessage);
       setManualInput(''); // Clear input after successful analysis
       setShowManualInput(false); // Hide input section
@@ -1305,12 +1398,14 @@ export default function MessagesScreen() {
         type: 'manual',
         processed: false
       };
-      // Save fallback result to Firebase and display in UI
+      // Save fallback result to Firebase - Firebase listener will add it to UI automatically
       try {
         await saveMessageToFirebase(fallbackResult);
-        console.log('✅ Saved manual fallback message to Firebase');
+        console.log('✅ Saved manual fallback message to Firebase - will appear in UI via Firebase listener');
       } catch (error) {
         console.error('❌ Failed to save manual fallback message:', error);
+        // If Firebase save fails, add to UI manually as fallback
+        setMessages(prevMessages => [fallbackResult, ...prevMessages]);
       }
       
       // Even for fallback results, try to create fraud alert if user requested manual analysis
@@ -1330,7 +1425,7 @@ export default function MessagesScreen() {
         console.warn('⚠️ Could not create fraud alert for manual analysis fallback:', alertError);
       }
       
-      setMessages(prevMessages => [fallbackResult, ...prevMessages]);
+      // Don't add to UI state here - let Firebase listener handle it to avoid duplicates
       setManualResult(fallbackResult);
       Alert.alert('Analysis Failed', 'Could not analyze the message. Please try again.');
     } finally {
@@ -1345,6 +1440,71 @@ export default function MessagesScreen() {
     if (!user) {
       Alert.alert('Authentication Required', 'Please sign in to analyze messages');
       return;
+    }
+
+    // Ask user for GPS permission BEFORE analysis starts
+    const hasGpsPermission = await LocationService.hasLocationPermission();
+    
+    if (!hasGpsPermission) {
+      // Ask for GPS permission before proceeding with analysis
+      const shouldRequestGps = await new Promise((resolve) => {
+        Alert.alert(
+          'GPS Permission for Fraud Mapping',
+          'GPS location is needed to map fraud alerts and provide better security insights.\n\n' +
+          '🗺️ GPS ENABLED: Fraud alerts will appear on security map\n' +
+          '❌ GPS DISABLED: Analysis will be cancelled\n\n' +
+          'Would you like to enable GPS to continue?',
+          [
+            {
+              text: 'Cancel Analysis',
+              style: 'cancel',
+              onPress: () => resolve(false)
+            },
+            {
+              text: 'Enable GPS',
+              onPress: () => resolve(true)
+            }
+          ]
+        );
+      });
+
+      if (!shouldRequestGps) {
+        console.log('📍 User cancelled analysis due to GPS permission');
+        Alert.alert(
+          'Analysis Cancelled',
+          'Message analysis was cancelled because GPS permission is required for fraud mapping.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // Request GPS permission
+      console.log('🎯 Requesting GPS permission before analysis...');
+      const permissionResult = await LocationService.requestLocationPermission();
+      
+      if (!permissionResult.granted) {
+        console.log('❌ GPS permission denied - cancelling analysis');
+        Alert.alert(
+          'Analysis Cancelled',
+          'GPS permission was denied. Message analysis cancelled.\n\n' +
+          'Enable GPS in device settings to use fraud mapping features.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      console.log('✅ GPS permission granted - proceeding with analysis');
+      setGpsPermissionGranted(true);
+      
+      Alert.alert(
+        'GPS Enabled!',
+        '🗺️ GPS permission granted! Fraud alerts will now appear on the security map.\n\n' +
+        'Starting message analysis...',
+        [{ text: 'Continue' }]
+      );
+    } else {
+      console.log('✅ GPS permission already granted - proceeding with analysis');
+      setGpsPermissionGranted(true);
     }
 
     setIosLoading(true);
@@ -1387,15 +1547,17 @@ export default function MessagesScreen() {
         processed: true
       };
       
-      // Save the analyzed message to Firebase and display in UI
+      // Save the analyzed message to Firebase - Firebase listener will add it to UI automatically
       try {
         await saveMessageToFirebase(analyzedMessage);
-        console.log('✅ Saved iOS manual message to Firebase');
+        console.log('✅ Saved iOS manual message to Firebase - will appear in UI via Firebase listener');
       } catch (error) {
         console.error('❌ Failed to save iOS manual message:', error);
+        // If Firebase save fails, add to UI manually as fallback
+        setMessages(prevMessages => [analyzedMessage, ...prevMessages]);
       }
       
-      setMessages(prevMessages => [analyzedMessage, ...prevMessages]);
+      // Don't add to UI state here - let Firebase listener handle it to avoid duplicates
       setIosResult(analyzedMessage);
       setIosInput(''); // Clear input after successful analysis
       
@@ -1411,15 +1573,17 @@ export default function MessagesScreen() {
         type: 'manual',
         processed: false
       };
-      // Save fallback result to Firebase and display in UI
+      // Save fallback result to Firebase - Firebase listener will add it to UI automatically
       try {
         await saveMessageToFirebase(fallbackResult);
-        console.log('✅ Saved iOS fallback message to Firebase');
+        console.log('✅ Saved iOS fallback message to Firebase - will appear in UI via Firebase listener');
       } catch (error) {
         console.error('❌ Failed to save iOS fallback message:', error);
+        // If Firebase save fails, add to UI manually as fallback
+        setMessages(prevMessages => [fallbackResult, ...prevMessages]);
       }
       
-      setMessages(prevMessages => [fallbackResult, ...prevMessages]);
+      // Don't add to UI state here - let Firebase listener handle it to avoid duplicates
       setIosResult(fallbackResult);
     } finally {
       setIosLoading(false);

@@ -102,21 +102,31 @@ export class MobileAlertSystem {
           coordinates: {
             latitude: locationData?.latitude || -1.9441,
             longitude: locationData?.longitude || 30.0619,
-            address: locationData?.address || 'Rwanda',
+            address: locationData?.realAddress || locationData?.address || 'Rwanda',
             city: locationData?.city || 'Unknown',
+            district: locationData?.district || '',
+            street: locationData?.street || '',
+            country: locationData?.country || 'Rwanda',
             accuracy: locationData?.accuracy || null,
             isDefault: locationData?.isRealGPS !== true, // TRUE if NOT real GPS (default location)
             isRealGPS: locationData?.isRealGPS === true, // TRUE if real GPS
             source: locationData?.source || 'mobile_app'
           },
           address: {
-            formattedAddress: locationData?.address || `${locationData?.city || 'Unknown'}, Rwanda`
+            formattedAddress: locationData?.realAddress || locationData?.adminDisplayName || locationData?.address || `${locationData?.city || 'Unknown'}, Rwanda`,
+            street: locationData?.street || '',
+            district: locationData?.district || '',
+            city: locationData?.city || 'Unknown',
+            country: locationData?.country || 'Rwanda'
           },
-          formattedLocation: locationData?.address || locationData?.city || 'Mobile Device',
+          formattedLocation: locationData?.realAddress || locationData?.adminDisplayName || locationData?.address || locationData?.city || 'Mobile Device',
           quality: {
             hasRealGPS: locationData?.isRealGPS === true, // Track if this is real GPS
             accuracy: locationData?.accuracy || null,
-            source: locationData?.source || 'mobile_app'
+            source: locationData?.source || 'mobile_app',
+            precisionLevel: locationData?.precisionLevel || 'standard',
+            canSeeStreets: locationData?.canSeeStreets || false,
+            canSeeBuildings: locationData?.canSeeBuildings || false
           }
         },
         
@@ -157,14 +167,17 @@ export class MobileAlertSystem {
             isRealGPS: alertData.location.coordinates.isRealGPS,
             hasRealGPS: alertData.location.quality.hasRealGPS,
             source: alertData.location.coordinates.source,
-            accuracy: alertData.location.coordinates.accuracy
-          }
+            accuracy: alertData.location.coordinates.accuracy,
+            realAddress: alertData.location.coordinates.address
+          },
+          formattedLocation: alertData.location.formattedLocation
         },
         messageText: alertData.messageText.substring(0, 50) + '...'
       }, null, 2));
       
       if (alertData.location.coordinates.isRealGPS) {
-        console.log('🗺️ ALERT WILL BE VISIBLE ON MAP - Real GPS coordinates detected');
+        console.log(`🗺️ ALERT WILL BE VISIBLE ON MAP with REAL ADDRESS: ${alertData.location.formattedLocation}`);
+        console.log(`📍 Admin will see: ${alertData.location.coordinates.address}`);
       } else {
         console.log('⚠️ ALERT WILL BE FILTERED OUT - Using default location (isDefault: true)');
       }
