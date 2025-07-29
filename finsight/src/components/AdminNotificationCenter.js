@@ -183,23 +183,23 @@ const AdminNotificationCenter = () => {
                   <div className="message-status">
                     <span 
                       className="status-badge"
-                      style={{ backgroundColor: getStatusColor(notification.message.currentStatus) }}
+                      style={{ backgroundColor: getStatusColor(notification.message?.currentStatus || notification.originalStatus || 'unknown') }}
                     >
-                      {notification.message.currentStatus.toUpperCase()}
+                      {(notification.message?.currentStatus || notification.originalStatus || 'UNKNOWN').toUpperCase()}
                     </span>
                     <span className="confidence-score">
-                      {Math.round((notification.message.confidence || 0) * 100)}% confidence
+                      {Math.round((notification.message?.confidence || notification.confidence || 0) * 100)}% confidence
                     </span>
                   </div>
                   
                   <div className="message-preview">
-                    <strong>From:</strong> {notification.message.sender} <br />
-                    <strong>Message:</strong> {notification.message.text?.substring(0, 100)}
-                    {notification.message.text?.length > 100 && '...'}
+                    <strong>From:</strong> {notification.message?.sender || notification.messageFrom || 'Unknown'} <br />
+                    <strong>Message:</strong> {(notification.message?.text || notification.messageText || 'No message content')?.substring(0, 100)}
+                    {(notification.message?.text || notification.messageText || '')?.length > 100 && '...'}
                   </div>
 
                   <div className="message-analysis">
-                    <strong>Analysis:</strong> {notification.message.analysis || 'No analysis available'}
+                    <strong>Analysis:</strong> {notification.message?.analysis || notification.description || 'No analysis available'}
                   </div>
                 </div>
 
@@ -252,36 +252,36 @@ const AdminNotificationCenter = () => {
 
               <div className="detail-section">
                 <h4>📱 Message Details</h4>
-                <p><strong>Sender:</strong> {selectedNotification.message.sender}</p>
+                <p><strong>Sender:</strong> {selectedNotification.message?.sender || selectedNotification.messageFrom || 'Unknown'}</p>
                 <p><strong>Current Status:</strong> 
                   <span 
                     className="status-badge"
-                    style={{ backgroundColor: getStatusColor(selectedNotification.message.currentStatus) }}
+                    style={{ backgroundColor: getStatusColor(selectedNotification.message?.currentStatus || selectedNotification.originalStatus || 'unknown') }}
                   >
-                    {selectedNotification.message.currentStatus.toUpperCase()}
+                    {(selectedNotification.message?.currentStatus || selectedNotification.originalStatus || 'UNKNOWN').toUpperCase()}
                   </span>
                 </p>
-                <p><strong>Confidence:</strong> {Math.round((selectedNotification.message.confidence || 0) * 100)}%</p>
+                <p><strong>Confidence:</strong> {Math.round((selectedNotification.message?.confidence || selectedNotification.confidence || 0) * 100)}%</p>
                 <p><strong>Message:</strong></p>
                 <div className="message-full-text">
-                  {selectedNotification.message.text}
+                  {selectedNotification.message?.text || selectedNotification.messageText || 'No message content available'}
                 </div>
               </div>
 
               <div className="detail-section">
                 <h4>🔍 Analysis</h4>
                 <div className="analysis-text">
-                  {selectedNotification.message.analysis || 'No analysis available'}
+                  {selectedNotification.message?.analysis || selectedNotification.description || 'No analysis available'}
                 </div>
               </div>
 
               <div className="detail-section">
                 <h4>📝 User Request</h4>
-                <p><strong>Reason:</strong> {selectedNotification.request.reason}</p>
-                <p><strong>Action:</strong> {selectedNotification.request.action}</p>
+                <p><strong>Reason:</strong> {selectedNotification.request?.reason || selectedNotification.description || 'User believes message is not fraud'}</p>
+                <p><strong>Action:</strong> {selectedNotification.request?.action || 'Review request'}</p>
                 <p><strong>Priority:</strong> 
-                  <span style={{ color: getPriorityColor(selectedNotification.priority) }}>
-                    {selectedNotification.priority.toUpperCase()}
+                  <span style={{ color: getPriorityColor(selectedNotification.priority || 'normal') }}>
+                    {(selectedNotification.priority || 'NORMAL').toUpperCase()}
                   </span>
                 </p>
               </div>
