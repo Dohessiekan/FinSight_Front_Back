@@ -142,7 +142,11 @@ export default function SimpleLocationToggle() {
   const formatLocation = (location) => {
     if (!location) return 'No location available';
     
-    return `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`;
+    const accuracy = location.accuracy ? `±${location.accuracy.toFixed(1)}m` : 'Unknown accuracy';
+    const accuracyLevel = location.accuracyLevel || 'Unknown';
+    const source = location.source || 'Unknown source';
+    
+    return `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)} (${accuracy} - ${accuracyLevel})`;
   };
 
   const formatLocationTime = (location) => {
@@ -150,6 +154,22 @@ export default function SimpleLocationToggle() {
     
     const date = new Date(location.timestamp);
     return date.toLocaleString();
+  };
+
+  const getLocationSourceDisplay = (location) => {
+    if (!location || !location.source) return '';
+    
+    switch (location.source) {
+      case 'GPS_SATELLITE':
+        return location.isGPSAccurate ? '🛰️ GPS (High Accuracy)' : '🛰️ GPS (Low Accuracy)';
+      case 'GPS_HIGH_ACCURACY':
+        return '📡 GPS';
+      case 'FALLBACK_LOCATION':
+      case 'FALLBACK_UPDATE':
+        return '📶 Network Location (GPS unavailable)';
+      default:
+        return '📍 Location';
+    }
   };
 
   return (
@@ -184,9 +204,24 @@ export default function SimpleLocationToggle() {
       {/* Location info when enabled */}
       {locationEnabled && lastLocation && (
         <View style={styles.locationInfo}>
-          <Text style={styles.locationLabel}>Current Location:</Text>
+          <View style={styles.locationHeader}>
+            <Text style={styles.locationLabel}>Current Location:</Text>
+            <Text style={styles.locationSource}>{getLocationSourceDisplay(lastLocation)}</Text>
+          </View>
           <Text style={styles.locationText}>{formatLocation(lastLocation)}</Text>
           <Text style={styles.locationTime}>Updated: {formatLocationTime(lastLocation)}</Text>
+          
+          {lastLocation.altitude && (
+            <Text style={styles.locationAltitude}>
+              Altitude: {lastLocation.altitude.toFixed(1)}m
+            </Text>
+          )}
+          
+          {!lastLocation.isGPSAccurate && lastLocation.source?.includes('GPS') && (
+            <Text style={styles.locationWarning}>
+              ⚠️ GPS accuracy is low. Consider moving to an open area.
+            </Text>
+          )}
           
           <TouchableOpacity 
             style={styles.updateButton}
@@ -195,7 +230,7 @@ export default function SimpleLocationToggle() {
           >
             <Ionicons name="refresh" size={16} color={colors.primary} />
             <Text style={styles.updateButtonText}>
-              {loading ? 'Updating...' : 'Update Location'}
+              {loading ? 'Getting GPS...' : 'Update GPS Location'}
             </Text>
           </TouchableOpacity>
           
@@ -208,12 +243,12 @@ export default function SimpleLocationToggle() {
                 const result = await LocationPermissionManager.handleUserLogin(user.uid);
                 if (result.success && result.location) {
                   setLastLocation(result.location);
-                  Alert.alert('Success', 'Location check completed successfully');
+                  Alert.alert('Success', 'GPS location check completed successfully');
                 } else {
                   Alert.alert('Info', result.message || 'Location check completed');
                 }
               } catch (error) {
-                Alert.alert('Error', 'Failed to check location');
+                Alert.alert('Error', 'Failed to check GPS location');
               } finally {
                 setLoading(false);
               }
@@ -222,7 +257,7 @@ export default function SimpleLocationToggle() {
           >
             <Ionicons name="location" size={16} color={colors.secondary} />
             <Text style={[styles.updateButtonText, { color: colors.secondary }]}>
-              Test Login Check
+              Test GPS Check
             </Text>
           </TouchableOpacity>
         </View>
@@ -231,8 +266,8 @@ export default function SimpleLocationToggle() {
       {/* Info text */}
       <Text style={styles.infoText}>
         {locationEnabled 
-          ? 'Your location is being tracked and saved securely. Location permission is verified on every login.'
-          : 'Enable location services to allow the app to access your GPS location. You will be prompted on each login to verify location access.'
+          ? 'Your precise GPS location is being tracked using satellite positioning. Location permission is verified on every login for security.'
+          : 'Enable GPS location services to allow the app to access your precise satellite-based location. You will be prompted on each login to verify location access.'
         }
       </Text>
     </View>
@@ -288,14 +323,28 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 16,
   },
+  locationHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
   locationLabel: {
     fontSize: 14,
     fontWeight: '600',
     color: colors.primary,
-    marginBottom: 4,
+  },
+  locationSource: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
   },
   locationText: {
-    fontSize: 14,
+    fontSize: 13,
     color: colors.text,
     fontFamily: 'monospace',
     marginBottom: 4,
@@ -303,7 +352,18 @@ const styles = StyleSheet.create({
   locationTime: {
     fontSize: 12,
     color: colors.textSecondary,
+    marginBottom: 8,
+  },
+  locationAltitude: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginBottom: 8,
+  },
+  locationWarning: {
+    fontSize: 12,
+    color: colors.warning || '#FF9500',
     marginBottom: 12,
+    fontStyle: 'italic',
   },
   updateButton: {
     flexDirection: 'row',

@@ -251,6 +251,10 @@ export default function MessagesScreen() {
   const [iosLoading, setIosLoading] = useState(false);
   const [iosResult, setIosResult] = useState(null);
   const [isOffline, setIsOffline] = useState(false);
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [manualInput, setManualInput] = useState('');
+  const [manualLoading, setManualLoading] = useState(false);
+  const [manualResult, setManualResult] = useState(null);
 
   // Cache keys for offline storage
   const MESSAGES_CACHE_KEY = `messages_${user?.uid || 'guest'}`;
@@ -359,14 +363,14 @@ export default function MessagesScreen() {
         updateData[`daily_${today}.smsCount`] = increment(1);
         updateData[`daily_${today}.date`] = today;
         
-        // Track fraud/suspicious messages
-        if (enhancedMessage.status === 'fraud') {
+        // Track fraud/suspicious messages based on message status
+        if (message.status === 'fraud') {
           updateData.activeFraudAlerts = increment(1);
           updateData.fraudsPrevented = increment(1);
           updateData[`daily_${today}.fraudCount`] = increment(1);
-        } else if (enhancedMessage.status === 'suspicious') {
+        } else if (message.status === 'suspicious') {
           updateData[`daily_${today}.suspiciousCount`] = increment(1);
-        } else if (enhancedMessage.status === 'safe') {
+        } else if (message.status === 'safe') {
           updateData[`daily_${today}.safeCount`] = increment(1);
         }
         
@@ -377,7 +381,8 @@ export default function MessagesScreen() {
         console.warn('⚠️ Dashboard error details:', dashboardError);
       }
       
-      return { exists: false, id: docRef.id, success: true };
+      // Return the result from the global duplicate detector
+      return result;
       
     } catch (error) {
       console.error('❌ Critical error saving message to Firebase:', error);
@@ -996,6 +1001,259 @@ export default function MessagesScreen() {
     }
   };
   
+  // Add handler for manual message analysis
+  const handleManualAnalysis = async () => {
+    if (!manualInput.trim()) {
+      Alert.alert('Empty Message', 'Please enter a message to analyze');
+      return;
+    }
+    if (!user) {
+      Alert.alert('Authentication Required', 'Please sign in to analyze messages');
+      return;
+    }
+
+    setManualLoading(true);
+    setManualResult(null);
+    try {
+      console.log('🔍 Analyzing manual message with spam detection...');
+      
+      // Use the predict-spam endpoint for analysis
+      const spamResult = await scanMessages([manualInput]);
+      console.log('🛡️ Manual spam analysis result:', spamResult);
+      
+      let status = 'safe';
+      let analysis = '✅ Message appears legitimate';
+      let confidence = spamResult?.confidence || 0;
+      let label = spamResult?.label || 'unknown';
+      
+      if (label === 'spam' || label === 'fraud') {
+        status = confidence > 0.8 ? 'fraud' : 'suspicious';
+        analysis = `🚨 ${label.toUpperCase()} detected (${Math.round(confidence * 100)}% confidence)`;
+      } else if (label === 'error' || label === 'no_data') {
+        status = 'unknown';
+        analysis = `❓ Analysis inconclusive (${label})`;
+      } else {
+        analysis = `✅ Legitimate (${Math.round(confidence * 100)}% confidence)`;
+      }
+      
+      const analyzedMessage = {
+        id: `manual-${Date.now()}-${Math.random().toString(36).substr(2, 9)}-${performance.now().toString(36)}`,
+        text: manualInput,
+        status,
+        analysis,
+        spamData: {
+          confidence: confidence || 0,
+          label: label || 'unknown',
+          probabilities: spamResult?.probabilities || { unknown: 1.0 }
+        },
+        timestamp: new Date().toLocaleString(),
+        sender: 'Manual Input',
+        type: 'manual',
+        processed: true
+      };
+      
+      // Save the analyzed message to Firebase and display in UI
+      try {
+        await saveMessageToFirebase(analyzedMessage);
+        console.log('✅ Saved manual message to Firebase');
+      } catch (error) {
+        console.error('❌ Failed to save manual message:', error);
+      }
+
+      // Create fraud alert if fraud or suspicious message detected (for map display)
+      if (status === 'fraud' || status === 'suspicious') {
+        try {
+          console.log('🚨 Creating fraud alert for manual analysis result...');
+          
+          // Ask user for location permission for map display
+          const locationChoice = await new Promise((resolve) => {
+            Alert.alert(
+              'Location Precision for Security Map',
+              'Choose location precision for fraud mapping:\n\n' +
+              '🎯 HIGH PRECISION: Street-level accuracy (30-60 seconds)\n' +
+              '📍 STANDARD: Quick GPS location (5-10 seconds)\n' +
+              '❌ NO LOCATION: No map display',
+              [
+                { text: 'No Location', onPress: () => resolve('none') },
+                { text: 'Standard GPS', onPress: () => resolve('standard') },
+                { text: 'High Precision', onPress: () => resolve('ultra') }
+              ]
+            );
+          });
+          
+          let realLocation = null;
+          if (locationChoice !== 'none') {
+            console.log(`📍 User selected: ${locationChoice} GPS precision`);
+            
+            try {
+              // Import LocationService for real GPS (FIXED PATH)
+              const { LocationService } = await import('../services/LocationService');
+              
+              if (locationChoice === 'ultra') {
+                console.log('🎯 Starting ULTRA-HIGH PRECISION GPS for street-level accuracy...');
+                
+                // Show progress alert for ultra-high precision
+                Alert.alert(
+                  'High Precision GPS',
+                  'Getting street-level GPS accuracy...\n\nThis may take 30-60 seconds for optimal precision.\n\nFor best results:\n• Go outdoors or near a window\n• Keep device still during scanning',
+                  [{ text: 'OK' }]
+                );
+                
+                const gpsResult = await LocationService.getUltraHighPrecisionGPS((progress, accuracy) => {
+                  console.log(`📡 GPS Progress: ${progress}`);
+                  if (accuracy) {
+                    console.log(`📍 Current accuracy: ±${accuracy.toFixed(1)}m`);
+                  }
+                });
+                
+                if (gpsResult.success) {
+                  realLocation = {
+                    latitude: gpsResult.location.latitude,
+                    longitude: gpsResult.location.longitude,
+                    accuracy: gpsResult.location.accuracy,
+                    isRealGPS: true,
+                    source: 'ULTRA_HIGH_PRECISION_GPS',
+                    address: `Manual Input - Ultra Precision GPS (±${gpsResult.location.accuracy.toFixed(1)}m)`,
+                    city: 'Rwanda',
+                    canSeeStreets: gpsResult.location.canSeeStreets,
+                    canSeeBuildings: gpsResult.location.canSeeBuildings,
+                    precisionLevel: gpsResult.location.accuracyLevel
+                  };
+                  
+                  console.log(`🏆 Got ULTRA-HIGH PRECISION GPS: ${realLocation.latitude}, ${realLocation.longitude} (±${realLocation.accuracy.toFixed(1)}m)`);
+                  
+                  if (realLocation.canSeeBuildings) {
+                    console.log('🏢 STREET-LEVEL ACCURACY: You can see individual buildings!');
+                    Alert.alert('Street-Level GPS Achieved!', `Location accuracy: ±${realLocation.accuracy.toFixed(1)}m\n\nYou can now see individual buildings and streets on the security map!`);
+                  } else if (realLocation.canSeeStreets) {
+                    console.log('�️ HIGH PRECISION: You can see streets and landmarks!');
+                    Alert.alert('High Precision GPS Achieved!', `Location accuracy: ±${realLocation.accuracy.toFixed(1)}m\n\nYou can see streets and major landmarks on the security map!`);
+                  }
+                } else {
+                  console.log('❌ Ultra-high precision GPS failed, falling back to standard GPS');
+                  Alert.alert('GPS Issue', gpsResult.fallbackMessage || 'High precision GPS failed. Using standard GPS instead.');
+                }
+              }
+              
+              // If ultra-precision failed or user chose standard, use standard GPS
+              if (!realLocation && locationChoice === 'standard') {
+                console.log('📍 Using standard high-accuracy GPS...');
+                const gpsResult = await LocationService.getGPSLocation();
+                
+                if (gpsResult.success && gpsResult.location.isGPSAccurate) {
+                  realLocation = {
+                    latitude: gpsResult.location.latitude,
+                    longitude: gpsResult.location.longitude,
+                    accuracy: gpsResult.location.accuracy,
+                    isRealGPS: true,
+                    source: 'GPS_SATELLITE',
+                    address: `Manual Input - Standard GPS (±${gpsResult.location.accuracy.toFixed(1)}m)`,
+                    city: 'Rwanda',
+                    precisionLevel: gpsResult.location.accuracyLevel
+                  };
+                  console.log(`✅ Got STANDARD GPS: ${realLocation.latitude}, ${realLocation.longitude} (±${realLocation.accuracy.toFixed(1)}m)`);
+                } else if (gpsResult.success) {
+                  // GPS was obtained but accuracy is low - still mark as real GPS attempt
+                  realLocation = {
+                    latitude: gpsResult.location.latitude,
+                    longitude: gpsResult.location.longitude,
+                    accuracy: gpsResult.location.accuracy,
+                    isRealGPS: true,
+                    source: 'GPS_LOW_ACCURACY',
+                    address: `Manual Input - GPS Low Accuracy (±${gpsResult.location.accuracy.toFixed(1)}m)`,
+                    city: 'Rwanda',
+                    precisionLevel: 'LOW_ACCURACY'
+                  };
+                  console.log(`⚠️ Got low-accuracy GPS: ${realLocation.latitude}, ${realLocation.longitude} (±${realLocation.accuracy.toFixed(1)}m)`);
+                }
+              }
+              
+              if (!realLocation) {
+                console.log('❌ All GPS requests failed, manual analysis will use default location (will not appear on map)');
+                Alert.alert('GPS Failed', 'Could not get GPS location. The fraud alert will not appear on the map.\n\nTry moving outdoors or near a window for better GPS reception.');
+              }
+              
+            } catch (gpsError) {
+              console.error('❌ GPS error for manual analysis:', gpsError);
+              console.log('⚠️ Manual analysis will use default location (will not appear on map)');
+              Alert.alert('GPS Error', 'GPS location failed. The fraud alert will not appear on the map.');
+            }
+          } else {
+            console.log('📍 User declined location sharing - fraud alert will not appear on map');
+          }
+          
+          const alertResult = await MobileAlertSystem.createFraudAlert(
+            analyzedMessage, 
+            user.uid, 
+            { confidence, label, category: 'Manual Analysis' },
+            realLocation  // Pass real GPS location
+          );
+          
+          if (alertResult.success) {
+            console.log(`✅ Fraud alert created for manual analysis: ${alertResult.alertId}`);
+            if (realLocation) {
+              console.log(`🗺️ Manual fraud alert will appear on map with REAL GPS coordinates`);
+            }
+          } else {
+            console.warn('⚠️ Failed to create fraud alert for manual analysis:', alertResult.error);
+          }
+        } catch (alertError) {
+          console.error('❌ Error creating fraud alert for manual analysis:', alertError);
+          // Don't fail the analysis if alert creation fails
+        }
+      }
+      
+      setMessages(prevMessages => [analyzedMessage, ...prevMessages]);
+      setManualResult(analyzedMessage);
+      setManualInput(''); // Clear input after successful analysis
+      setShowManualInput(false); // Hide input section
+      
+    } catch (e) {
+      console.error('❌ Manual analysis failed:', e);
+      const fallbackResult = { 
+        id: `manual-fallback-${Date.now()}-${Math.random().toString(36).substr(2, 9)}-${performance.now().toString(36)}`,
+        text: manualInput,
+        status: 'unknown', 
+        analysis: 'Analysis failed - API error. Manual review needed.',
+        timestamp: new Date().toLocaleString(),
+        sender: 'Manual Input',
+        type: 'manual',
+        processed: false
+      };
+      // Save fallback result to Firebase and display in UI
+      try {
+        await saveMessageToFirebase(fallbackResult);
+        console.log('✅ Saved manual fallback message to Firebase');
+      } catch (error) {
+        console.error('❌ Failed to save manual fallback message:', error);
+      }
+      
+      // Even for fallback results, try to create fraud alert if user requested manual analysis
+      // (assumption is user suspects fraud if using manual analysis)
+      try {
+        console.log('🚨 Creating fraud alert for manual analysis fallback (user suspected fraud)...');
+        const alertResult = await MobileAlertSystem.createFraudAlert(
+          { ...fallbackResult, status: 'suspicious' }, // Mark as suspicious since API failed but user manually checked
+          user.uid, 
+          { confidence: 0.5, label: 'suspicious', category: 'Manual Analysis - API Failed' }
+        );
+        
+        if (alertResult.success) {
+          console.log(`✅ Fraud alert created for manual analysis fallback: ${alertResult.alertId}`);
+        }
+      } catch (alertError) {
+        console.warn('⚠️ Could not create fraud alert for manual analysis fallback:', alertError);
+      }
+      
+      setMessages(prevMessages => [fallbackResult, ...prevMessages]);
+      setManualResult(fallbackResult);
+      Alert.alert('Analysis Failed', 'Could not analyze the message. Please try again.');
+    } finally {
+      setManualLoading(false);
+      Keyboard.dismiss();
+    }
+  };
+  
   // Add handler for iOS paste/scan
   const handleIosScan = async () => {
     if (!iosInput.trim()) return;
@@ -1239,19 +1497,37 @@ export default function MessagesScreen() {
             Scan analyzes current month: {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
           </Text>
         </View>
-        <View style={styles.scanButtonContainer}>
-          <TouchableOpacity 
-            style={styles.scanButton}
-            onPress={handleScanPress}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color={colors.white} size="small" />
-            ) : (
-              <Ionicons name="scan" size={20} color={colors.white} />
-            )}
-          </TouchableOpacity>
-          <Text style={styles.scanButtonLabel}>Scan Month</Text>
+        <View style={styles.headerRight}>
+          <View style={styles.scanButtonContainer}>
+            <TouchableOpacity 
+              style={styles.scanButton}
+              onPress={handleScanPress}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <Ionicons name="scan" size={20} color={colors.white} />
+              )}
+            </TouchableOpacity>
+            <Text style={styles.scanButtonLabel}>Scan Month</Text>
+          </View>
+          
+          {/* Manual Analysis Button */}
+          <View style={styles.manualButtonContainer}>
+            <TouchableOpacity 
+              style={styles.manualButton}
+              onPress={() => setShowManualInput(!showManualInput)}
+              disabled={loading}
+            >
+              <Ionicons 
+                name={showManualInput ? "close" : "document-text"} 
+                size={20} 
+                color={colors.white} 
+              />
+            </TouchableOpacity>
+            <Text style={styles.manualButtonLabel}>Manual</Text>
+          </View>
         </View>
       </View>
       
@@ -1262,6 +1538,74 @@ export default function MessagesScreen() {
           <Text style={styles.offlineText}>
             Using cached data - Some features may be limited
           </Text>
+        </View>
+      )}
+      
+      {/* Manual Message Input Section */}
+      {showManualInput && (
+        <View style={styles.manualInputContainer}>
+          <View style={styles.manualInputHeader}>
+            <Ionicons name="document-text" size={20} color={colors.primary} />
+            <Text style={styles.manualInputTitle}>Manual Message Analysis</Text>
+          </View>
+          <Text style={styles.manualInputSubtitle}>
+            Paste or type any SMS message below to analyze it for fraud detection
+          </Text>
+          <TextInput
+            style={styles.manualTextInput}
+            placeholder="Paste your SMS message here..."
+            value={manualInput}
+            onChangeText={setManualInput}
+            multiline
+            numberOfLines={4}
+            textAlignVertical="top"
+          />
+          <View style={styles.manualInputActions}>
+            <TouchableOpacity 
+              style={styles.clearButton} 
+              onPress={() => {
+                setManualInput('');
+                setManualResult(null);
+              }}
+            >
+              <Text style={styles.clearButtonText}>Clear</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.analyzeButton} 
+              onPress={handleManualAnalysis} 
+              disabled={manualLoading || !manualInput.trim()}
+            >
+              {manualLoading ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <Text style={styles.analyzeButtonText}>Analyze Message</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          {manualResult && (
+            <View style={[
+              styles.manualResultCard,
+              manualResult.status === 'fraud' && styles.fraudResultCard,
+              manualResult.status === 'suspicious' && styles.suspiciousResultCard,
+              manualResult.status === 'safe' && styles.safeResultCard
+            ]}>
+              <View style={styles.manualResultHeader}>
+                {getStatusIcon(manualResult.status)}
+                <Text style={[
+                  styles.manualResultStatus,
+                  manualResult.status === 'safe' && { color: colors.success },
+                  manualResult.status === 'suspicious' && { color: colors.warning },
+                  manualResult.status === 'fraud' && { color: colors.danger }
+                ]}>
+                  {manualResult.status.charAt(0).toUpperCase() + manualResult.status.slice(1)}
+                </Text>
+              </View>
+              <Text style={styles.manualResultText}>{manualResult.analysis}</Text>
+              <Text style={styles.manualResultNote}>
+                ✅ Message saved to your SMS analysis list
+              </Text>
+            </View>
+          )}
         </View>
       )}
       
@@ -1511,6 +1855,11 @@ const styles = StyleSheet.create({
   headerLeft: {
     flex: 1,
   },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
   greeting: {
     fontSize: 24,
     fontWeight: '700',
@@ -1547,6 +1896,29 @@ const styles = StyleSheet.create({
   scanButtonLabel: {
     fontSize: 10,
     color: colors.primary,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  manualButtonContainer: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  manualButton: {
+    backgroundColor: colors.secondary || '#6c757d',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: colors.secondary || '#6c757d',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  manualButtonLabel: {
+    fontSize: 10,
+    color: colors.secondary || '#6c757d',
     fontWeight: '600',
     textAlign: 'center',
   },
@@ -1846,5 +2218,122 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '600',
+  },
+  
+  // Manual Input Styles
+  manualInputContainer: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginHorizontal: 24,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  manualInputHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  manualInputTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  manualInputSubtitle: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 16,
+    lineHeight: 20,
+  },
+  manualTextInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    padding: 16,
+    backgroundColor: colors.background,
+    fontSize: 16,
+    color: colors.text,
+    minHeight: 100,
+    marginBottom: 16,
+    textAlignVertical: 'top',
+  },
+  manualInputActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  clearButton: {
+    flex: 1,
+    backgroundColor: colors.border,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  clearButtonText: {
+    color: colors.textSecondary,
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  analyzeButton: {
+    flex: 2,
+    backgroundColor: colors.primary,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  analyzeButtonText: {
+    color: colors.white,
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  manualResultCard: {
+    marginTop: 16,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  fraudResultCard: {
+    backgroundColor: colors.danger + '05',
+    borderColor: colors.danger + '20',
+  },
+  suspiciousResultCard: {
+    backgroundColor: colors.warning + '05',
+    borderColor: colors.warning + '20',
+  },
+  safeResultCard: {
+    backgroundColor: colors.success + '05',
+    borderColor: colors.success + '20',
+  },
+  manualResultHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  manualResultStatus: {
+    fontSize: 14,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  manualResultText: {
+    fontSize: 14,
+    color: colors.text,
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  manualResultNote: {
+    fontSize: 12,
+    color: colors.success,
+    fontStyle: 'italic',
   },
 });

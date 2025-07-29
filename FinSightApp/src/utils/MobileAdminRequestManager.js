@@ -7,6 +7,8 @@
 
 import { collection, addDoc, serverTimestamp, doc, updateDoc, increment } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import { UserLocationManager } from './UserLocationManager';
+import { LocationService } from '../services/LocationService';
 
 export class MobileAdminRequestManager {
   
@@ -16,6 +18,33 @@ export class MobileAdminRequestManager {
   static async sendFraudReviewRequest(userId, messageData, disputeReason = 'User believes message is legitimate') {
     try {
       console.log(`🚨 Sending fraud review request from user ${userId} for message ${messageData.id}`);
+      
+      // Get current location for mapping in web app
+      let locationData = null;
+      try {
+        const gpsResult = await LocationService.getGPSLocation();
+        if (gpsResult.success) {
+          locationData = {
+            latitude: gpsResult.location.latitude,
+            longitude: gpsResult.location.longitude,
+            accuracy: gpsResult.location.accuracy,
+            isRealGPS: gpsResult.location.isGPSAccurate,
+            source: gpsResult.location.source,
+            address: `Location Accuracy: ${gpsResult.location.accuracyLevel}`,
+            city: 'Rwanda'
+          };
+        } else {
+          // Fallback to default Rwanda location
+          locationData = UserLocationManager.getRwandaRegionCoordinates('kigali');
+          locationData.isRealGPS = false;
+          locationData.source = 'default_location';
+        }
+      } catch (locationError) {
+        console.warn('⚠️ Could not get location for fraud review:', locationError);
+        locationData = UserLocationManager.getRwandaRegionCoordinates('kigali');
+        locationData.isRealGPS = false;
+        locationData.source = 'default_location';
+      }
       
       // Create admin notification for fraud review
       const fraudReviewData = {
@@ -34,6 +63,28 @@ export class MobileAdminRequestManager {
         fraudConfidence: messageData.spamData?.confidence || 0,
         fraudType: messageData.spamData?.label || 'fraud',
         aiAnalysis: messageData.analysis || 'Fraud detected by mobile app',
+        
+        // Location data for web app map display (matching FraudAlerts.js format)
+        location: {
+          coordinates: {
+            latitude: locationData?.latitude || -1.9441,
+            longitude: locationData?.longitude || 30.0619,
+            address: locationData?.address || 'Rwanda',
+            city: locationData?.city || 'Unknown',
+            accuracy: locationData?.accuracy || null,
+            isDefault: locationData?.isRealGPS === false,
+            source: locationData?.source || 'mobile_app'
+          },
+          address: {
+            formattedAddress: locationData?.address || `${locationData?.city || 'Unknown'}, Rwanda`
+          },
+          formattedLocation: locationData?.address || locationData?.city || 'Mobile Device',
+          quality: {
+            hasRealGPS: locationData?.isRealGPS === true,
+            accuracy: locationData?.accuracy || null,
+            source: locationData?.source || 'mobile_app'
+          }
+        },
         
         // Dispute details
         request: {
@@ -105,6 +156,32 @@ export class MobileAdminRequestManager {
     try {
       console.log(`🚫 User ${userId} blocking message ${messageData.id}`);
       
+      // Get current location for fraud tracking
+      let locationData = null;
+      try {
+        const gpsResult = await LocationService.getGPSLocation();
+        if (gpsResult.success) {
+          locationData = {
+            latitude: gpsResult.location.latitude,
+            longitude: gpsResult.location.longitude,
+            accuracy: gpsResult.location.accuracy,
+            isRealGPS: gpsResult.location.isGPSAccurate,
+            source: gpsResult.location.source,
+            address: `Location Accuracy: ${gpsResult.location.accuracyLevel}`,
+            city: 'Rwanda'
+          };
+        } else {
+          locationData = UserLocationManager.getRwandaRegionCoordinates('kigali');
+          locationData.isRealGPS = false;
+          locationData.source = 'default_location';
+        }
+      } catch (locationError) {
+        console.warn('⚠️ Could not get location for message blocking:', locationError);
+        locationData = UserLocationManager.getRwandaRegionCoordinates('kigali');
+        locationData.isRealGPS = false;
+        locationData.source = 'default_location';
+      }
+      
       // Update the message status to blocked
       const messageRef = doc(db, 'users', userId, 'messages', messageData.id);
       await updateDoc(messageRef, {
@@ -122,6 +199,28 @@ export class MobileAdminRequestManager {
         messageId: messageData.id,
         messageText: messageData.text || messageData.content || '',
         messageFrom: messageData.sender || messageData.from || 'Unknown',
+        
+        // Location data for web app tracking
+        location: {
+          coordinates: {
+            latitude: locationData?.latitude || -1.9441,
+            longitude: locationData?.longitude || 30.0619,
+            address: locationData?.address || 'Rwanda',
+            city: locationData?.city || 'Unknown',
+            accuracy: locationData?.accuracy || null,
+            isDefault: locationData?.isRealGPS === false,
+            source: locationData?.source || 'mobile_app'
+          },
+          address: {
+            formattedAddress: locationData?.address || `${locationData?.city || 'Unknown'}, Rwanda`
+          },
+          formattedLocation: locationData?.address || locationData?.city || 'Mobile Device',
+          quality: {
+            hasRealGPS: locationData?.isRealGPS === true,
+            accuracy: locationData?.accuracy || null,
+            source: locationData?.source || 'mobile_app'
+          }
+        },
         
         request: {
           type: 'message_blocked_by_user',
@@ -424,6 +523,32 @@ export class MobileAdminRequestManager {
     try {
       console.log(`📝 Creating fraud review request for message: ${messageId}`);
       
+      // Get current location for mapping context
+      let locationData = null;
+      try {
+        const gpsResult = await LocationService.getGPSLocation();
+        if (gpsResult.success) {
+          locationData = {
+            latitude: gpsResult.location.latitude,
+            longitude: gpsResult.location.longitude,
+            accuracy: gpsResult.location.accuracy,
+            isRealGPS: gpsResult.location.isGPSAccurate,
+            source: gpsResult.location.source,
+            address: `Location Accuracy: ${gpsResult.location.accuracyLevel}`,
+            city: 'Rwanda'
+          };
+        } else {
+          locationData = UserLocationManager.getRwandaRegionCoordinates('kigali');
+          locationData.isRealGPS = false;
+          locationData.source = 'default_location';
+        }
+      } catch (locationError) {
+        console.warn('⚠️ Could not get location for fraud review:', locationError);
+        locationData = UserLocationManager.getRwandaRegionCoordinates('kigali');
+        locationData.isRealGPS = false;
+        locationData.source = 'default_location';
+      }
+      
       const notification = {
         // User info
         userId: userId,
@@ -435,6 +560,28 @@ export class MobileAdminRequestManager {
         messageFrom: messageData.sender || messageData.address || messageData.from,
         originalStatus: messageData.status,
         confidence: messageData.spamData?.confidence || messageData.confidence || 0,
+        
+        // Location data for web app map display
+        location: {
+          coordinates: {
+            latitude: locationData?.latitude || -1.9441,
+            longitude: locationData?.longitude || 30.0619,
+            address: locationData?.address || 'Rwanda',
+            city: locationData?.city || 'Unknown',
+            accuracy: locationData?.accuracy || null,
+            isDefault: locationData?.isRealGPS === false,
+            source: locationData?.source || 'mobile_app'
+          },
+          address: {
+            formattedAddress: locationData?.address || `${locationData?.city || 'Unknown'}, Rwanda`
+          },
+          formattedLocation: locationData?.address || locationData?.city || 'Mobile Device',
+          quality: {
+            hasRealGPS: locationData?.isRealGPS === true,
+            accuracy: locationData?.accuracy || null,
+            source: locationData?.source || 'mobile_app'
+          }
+        },
         
         // Request details
         title: 'Fraud Message Review Request',

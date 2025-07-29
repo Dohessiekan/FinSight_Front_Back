@@ -1,5 +1,8 @@
 /**
- * Real-time Alert System for Mobile App Fraud Detection
+ *import { collection, addDoc, serverTimestamp, doc, updateDoc, increment } from 'firebase/firestore';
+import { db } from '../config/firebase';
+import { UserLocationManager } from './UserLocationManager';
+import { LocationService } from '../services/LocationService';al-time Alert System for Mobile App Fraud Detection
  * 
  * Automatically creates fraud alerts when suspicious/fraud messages 
  * are detected during mobile app scans
@@ -26,15 +29,41 @@ export class MobileAlertSystem {
       
       // Try to get current location or use provided location
       let locationData = userLocation;
-      if (!locationData) {
+      
+      // If userLocation is provided and has real GPS, use it directly
+      if (locationData && locationData.isRealGPS) {
+        console.log(`✅ Using provided REAL GPS location: ${locationData.latitude}, ${locationData.longitude} (±${locationData.accuracy}m)`);
+        console.log(`🗺️ This alert WILL appear on the web app map with REAL GPS coordinates`);
+      } else if (!locationData) {
+        // Try to get high-accuracy GPS location
         try {
-          // Try to get device location or Rwanda region approximation
-          locationData = await UserLocationManager.requestDeviceLocation();
+          const gpsResult = await LocationService.getGPSLocation();
+          if (gpsResult.success) {
+            locationData = {
+              latitude: gpsResult.location.latitude,
+              longitude: gpsResult.location.longitude,
+              accuracy: gpsResult.location.accuracy,
+              isRealGPS: gpsResult.location.isGPSAccurate,
+              source: gpsResult.location.source,
+              address: `GPS Accuracy: ${gpsResult.location.accuracyLevel}`,
+              city: 'Rwanda'
+            };
+            console.log(`📍 Using real GPS location: ${locationData.latitude}, ${locationData.longitude} (±${locationData.accuracy}m)`);
+          } else {
+            // Fallback to device location or Rwanda region
+            locationData = await UserLocationManager.requestDeviceLocation();
+            console.log('📍 Using device location as fallback');
+          }
         } catch (locationError) {
           console.warn('⚠️ Could not get location:', locationError);
           // Use default Rwanda location
           locationData = UserLocationManager.getRwandaRegionCoordinates('kigali');
+          locationData.isRealGPS = false;
+          locationData.source = 'default_location';
+          console.log('📍 Using default Rwanda location');
         }
+      } else {
+        console.log('📍 Using provided location data (fallback)');
       }
       
       // Update user's location in their profile for future mapping
@@ -76,7 +105,8 @@ export class MobileAlertSystem {
             address: locationData?.address || 'Rwanda',
             city: locationData?.city || 'Unknown',
             accuracy: locationData?.accuracy || null,
-            isDefault: locationData?.isRealGPS === false, // Mark as default if not real GPS
+            isDefault: locationData?.isRealGPS !== true, // TRUE if NOT real GPS (default location)
+            isRealGPS: locationData?.isRealGPS === true, // TRUE if real GPS
             source: locationData?.source || 'mobile_app'
           },
           address: {
@@ -118,6 +148,27 @@ export class MobileAlertSystem {
       
       // Save to fraud_alerts collection (monitored by web app)
       const alertsRef = collection(db, 'fraud_alerts');
+      
+      // Log the alert data structure for debugging
+      console.log('🔍 Final alert data structure:', JSON.stringify({
+        location: {
+          coordinates: {
+            isDefault: alertData.location.coordinates.isDefault,
+            isRealGPS: alertData.location.coordinates.isRealGPS,
+            hasRealGPS: alertData.location.quality.hasRealGPS,
+            source: alertData.location.coordinates.source,
+            accuracy: alertData.location.coordinates.accuracy
+          }
+        },
+        messageText: alertData.messageText.substring(0, 50) + '...'
+      }, null, 2));
+      
+      if (alertData.location.coordinates.isRealGPS) {
+        console.log('🗺️ ALERT WILL BE VISIBLE ON MAP - Real GPS coordinates detected');
+      } else {
+        console.log('⚠️ ALERT WILL BE FILTERED OUT - Using default location (isDefault: true)');
+      }
+      
       const alertDoc = await addDoc(alertsRef, alertData);
       
       console.log(`✅ Fraud alert created with ID: ${alertDoc.id}`);
