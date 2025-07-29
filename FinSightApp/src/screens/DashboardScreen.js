@@ -65,6 +65,7 @@ export default function DashboardScreen({ navigation }) {
   // Firebase error handling state
   const [firebaseError, setFirebaseError] = useState(null);
   const [alertsListenerActive, setAlertsListenerActive] = useState(false);
+  const [securityScoreListenerActive, setSecurityScoreListenerActive] = useState(false);
   
   // User data state
   const [userData, setUserData] = useState(null);
@@ -295,6 +296,113 @@ export default function DashboardScreen({ navigation }) {
   };
 
   // Function to load real-time fraud alerts from Firebase with robust error handling
+  // Setup real-time security score listener
+  const setupRealtimeSecurityScore = () => {
+    if (!user) {
+      console.log('⚠️ No user available for security score listener');
+      return () => {}; // Return empty cleanup function
+    }
+
+    try {
+      console.log('🔒 Setting up real-time security score listener...');
+      setSecurityScoreListenerActive(false);
+      
+      // Debounce security score updates to avoid rapid recalculations
+      let updateTimeout;
+      const debounceUpdate = async (source) => {
+        if (updateTimeout) {
+          clearTimeout(updateTimeout);
+        }
+        
+        updateTimeout = setTimeout(async () => {
+          if (!user) return;
+          
+          console.log(`🔒 Debounced security score update from ${source}`);
+          try {
+            const updatedScore = await SecurityScoreManager.calculateSecurityScore(user.uid);
+            if (updatedScore) {
+              setSecurityScoreData(updatedScore);
+              setFraudScore(100 - updatedScore.securityScore);
+              console.log(`🔒 Security score updated: ${updatedScore.securityScore}/100 (source: ${source})`);
+            }
+          } catch (error) {
+            console.error(`❌ Failed to update security score from ${source}:`, error);
+          }
+        }, 2000); // Wait 2 seconds before updating
+      };
+      
+      // Listen to fraud alerts changes
+      const fraudAlertsRef = collection(db, 'fraud_alerts');
+      const fraudAlertsQuery = query(
+        fraudAlertsRef,
+        where('userId', '==', user.uid)
+      );
+
+      // Listen to user messages changes
+      const userMessagesRef = collection(db, 'users', user.uid, 'messages');
+      
+      // Create listeners for both collections
+      const unsubscribeFraudAlerts = onSnapshot(
+        fraudAlertsQuery,
+        async (snapshot) => {
+          if (!user) return;
+          
+          console.log(`🔒 Fraud alerts changed: ${snapshot.docs.length} alerts - scheduling security score update`);
+          setSecurityScoreListenerActive(true);
+          
+          // Use debounced update
+          await debounceUpdate('fraud alerts');
+        },
+        (error) => {
+          console.error('❌ Fraud alerts security score listener error:', error);
+          setSecurityScoreListenerActive(false);
+        }
+      );
+
+      const unsubscribeUserMessages = onSnapshot(
+        userMessagesRef,
+        async (snapshot) => {
+          if (!user) return;
+          
+          console.log(`🔒 User messages changed: ${snapshot.docs.length} messages - scheduling security score update`);
+          setSecurityScoreListenerActive(true);
+          
+          // Use debounced update
+          await debounceUpdate('user messages');
+        },
+        (error) => {
+          console.error('❌ User messages security score listener error:', error);
+          setSecurityScoreListenerActive(false);
+        }
+      );
+
+      // Set listener as active
+      setSecurityScoreListenerActive(true);
+      console.log('🔒 Real-time security score listener activated');
+
+      // Return cleanup function for both listeners
+      return () => {
+        if (updateTimeout) {
+          clearTimeout(updateTimeout);
+        }
+        if (unsubscribeFraudAlerts) {
+          unsubscribeFraudAlerts();
+          console.log('🔒 Fraud alerts security score listener cleaned up');
+        }
+        if (unsubscribeUserMessages) {
+          unsubscribeUserMessages();
+          console.log('🔒 User messages security score listener cleaned up');
+        }
+        setSecurityScoreListenerActive(false);
+      };
+
+    } catch (error) {
+      console.error('❌ Failed to setup real-time security score listener:', error);
+      setSecurityScoreListenerActive(false);
+      return () => {}; // Return empty cleanup function
+    }
+  };
+
   const setupRealtimeAlerts = () => {
     if (!user) {
       console.log('⚠️ No user available for alerts listener');
@@ -307,7 +415,7 @@ export default function DashboardScreen({ navigation }) {
       setFirebaseError(null);
       
       // Create the alerts query - temporarily without orderBy to avoid index requirement
-      const alertsRef = collection(db, 'fraudAlerts');
+      const alertsRef = collection(db, 'fraud_alerts');
       
       // Temporary fix: Query without orderBy to avoid index requirement
       // TODO: Create Firebase index then restore orderBy('createdAt', 'desc')
@@ -539,7 +647,7 @@ export default function DashboardScreen({ navigation }) {
       console.log('🧪 Testing if Firebase index is ready...');
       
       // Try the optimized query with orderBy
-      const alertsRef = collection(db, 'fraudAlerts');
+      const alertsRef = collection(db, 'fraud_alerts');
       const testQuery = query(
         alertsRef, 
         where('userId', '==', user.uid),
@@ -882,30 +990,49 @@ export default function DashboardScreen({ navigation }) {
     }
   }, [navigation]);
 
-  // Setup real-time alerts listener
+  // Setup real-time alerts and security score listeners
   useEffect(() => {
-    let unsubscribe;
+    let unsubscribeAlerts;
+    let unsubscribeSecurityScore;
     
     if (user) {
-      console.log('🔄 Setting up real-time alerts listener for user:', user.uid);
-      unsubscribe = setupRealtimeAlerts();
+      console.log('🔄 Setting up real-time listeners for user:', user.uid);
+      
+      // Setup alerts listener
+      unsubscribeAlerts = setupRealtimeAlerts();
+      
+      // Setup security score listener
+      unsubscribeSecurityScore = setupRealtimeSecurityScore();
+      
     } else {
-      // Clear alerts state when user signs out
-      console.log('🔄 User signed out - clearing alerts state');
+      // Clear state when user signs out
+      console.log('🔄 User signed out - clearing real-time state');
       setRealtimeAlerts([]);
       setAlertsLoading(false);
       setAlertsListenerActive(false);
       setFirebaseError(null);
+      setSecurityScoreData(null);
+      setSecurityScoreLoading(false);
+      setSecurityScoreListenerActive(false);
     }
     
     // Cleanup function
     return () => {
-      if (unsubscribe && typeof unsubscribe === 'function') {
+      if (unsubscribeAlerts && typeof unsubscribeAlerts === 'function') {
         try {
-          unsubscribe();
+          unsubscribeAlerts();
           console.log('🔄 Real-time alerts listener cleaned up');
         } catch (error) {
           console.error('⚠️ Error cleaning up alerts listener:', error);
+        }
+      }
+      
+      if (unsubscribeSecurityScore && typeof unsubscribeSecurityScore === 'function') {
+        try {
+          unsubscribeSecurityScore();
+          console.log('🔒 Real-time security score listener cleaned up');
+        } catch (error) {
+          console.error('⚠️ Error cleaning up security score listener:', error);
         }
       }
     };
@@ -1560,22 +1687,70 @@ export default function DashboardScreen({ navigation }) {
               <Ionicons name="notifications" size={16} color={colors.white} />
             </TouchableOpacity>
             
-            {/* 🔒 Security Score Test Button */}
+            {/* 🔒 Security Score Real-time Test Button */}
             <TouchableOpacity 
               style={[styles.notificationButton, { backgroundColor: colors.success, marginRight: 8 }]}
               onPress={() => {
                 Alert.alert(
-                  'Security Score Test',
-                  `Current Score: ${securityScoreData?.securityScore || (100 - fraudScore)}/100\nRisk Level: ${risk.text}\n\nRefresh security score?`,
+                  '🔒 Security Score Real-time Test',
+                  `Current Score: ${securityScoreData?.securityScore || (100 - fraudScore)}/100\nRisk Level: ${risk.text}\nListener Active: ${securityScoreListenerActive ? 'Yes ✅' : 'No ❌'}\n\nActions:`,
                   [
                     { text: 'Cancel', style: 'cancel' },
-                    { text: 'Refresh', onPress: () => loadSecurityScore(true) },
+                    { text: 'Refresh Score', onPress: () => loadSecurityScore(true) },
+                    { 
+                      text: 'Test Real-time', 
+                      onPress: async () => {
+                        try {
+                          // Create a test fraud alert to trigger real-time update
+                          Alert.alert(
+                            '🧪 Creating Test Fraud Alert',
+                            'This will create a test fraud alert to demonstrate real-time security score updates. Watch the security score change automatically!',
+                            [
+                              { text: 'Cancel', style: 'cancel' },
+                              { 
+                                text: 'Create Test Alert', 
+                                onPress: async () => {
+                                  const { MobileAlertSystem } = await import('../utils/MobileAlertSystem');
+                                  const testMessage = {
+                                    id: `test-${Date.now()}`,
+                                    text: 'URGENT: Your account has been compromised. Send RWF 50,000 to secure it.',
+                                    status: 'fraud',
+                                    analysis: '🚨 Test fraud message for real-time security score demo',
+                                    timestamp: new Date().toLocaleString(),
+                                    sender: 'Test Fraudster',
+                                    type: 'test'
+                                  };
+                                  
+                                  const alertResult = await MobileAlertSystem.createFraudAlert(
+                                    testMessage, 
+                                    user.uid, 
+                                    { confidence: 0.95, label: 'fraud', category: 'Test Alert' }
+                                  );
+                                  
+                                  if (alertResult.success) {
+                                    Alert.alert(
+                                      '✅ Test Alert Created!',
+                                      `Watch the security score update automatically!\n\nAlert ID: ${alertResult.alertId}\n\nThe real-time listener will detect this change and update your security score within 2 seconds.`,
+                                      [{ text: 'OK' }]
+                                    );
+                                  } else {
+                                    Alert.alert('❌ Test Failed', `Error: ${alertResult.error}`);
+                                  }
+                                }
+                              }
+                            ]
+                          );
+                        } catch (error) {
+                          Alert.alert('❌ Error', `Failed to create test alert: ${error.message}`);
+                        }
+                      }
+                    },
                     { text: 'Show Details', onPress: () => {
                       if (securityScoreData) {
                         console.log('🔒 Security Score Details:', securityScoreData);
                         Alert.alert(
                           'Security Details',
-                          `Messages Analyzed: ${securityScoreData.messagesAnalyzed}\nFraud: ${securityScoreData.fraudMessages}\nSuspicious: ${securityScoreData.suspiciousMessages}\nSafe: ${securityScoreData.safeMessages}\nLast Updated: ${new Date(securityScoreData.lastCalculated).toLocaleString()}`
+                          `Messages Analyzed: ${securityScoreData.messagesAnalyzed}\nFraud: ${securityScoreData.fraudMessages}\nSuspicious: ${securityScoreData.suspiciousMessages}\nSafe: ${securityScoreData.safeMessages}\nLast Updated: ${new Date(securityScoreData.lastCalculated).toLocaleString()}\nReal-time Listener: ${securityScoreListenerActive ? 'Active ✅' : 'Inactive ❌'}`
                         );
                       }
                     }}
@@ -1646,6 +1821,14 @@ export default function DashboardScreen({ navigation }) {
               )}
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {/* Real-time listener status indicator */}
+              {securityScoreListenerActive && (
+                <View style={styles.realtimeIndicator}>
+                  <View style={styles.realtimeDot} />
+                  <Text style={styles.realtimeText}>Live</Text>
+                </View>
+              )}
+              
               <TouchableOpacity 
                 onPress={() => loadSecurityScore(true)}
                 style={styles.refreshScoreButton}
@@ -1684,9 +1867,9 @@ export default function DashboardScreen({ navigation }) {
           
           <Text style={styles.scoreDescription}>
             {securityScoreData ? (
-              `Based on analysis of ${securityScoreData.messagesAnalyzed} messages. ${securityScoreData.fraudMessages + securityScoreData.suspiciousMessages} threats detected.`
+              `Based on analysis of ${securityScoreData.messagesAnalyzed} messages. ${securityScoreData.fraudMessages + securityScoreData.suspiciousMessages} threats detected.${securityScoreListenerActive ? ' 🔄 Real-time updates active' : ''}`
             ) : (
-              `Your account is ${risk.text.toLowerCase()}. ${fraudScore > 0 && `${fraudScore} potential threats detected.`}`
+              `Your account is ${risk.text.toLowerCase()}. ${fraudScore > 0 && `${fraudScore} potential threats detected.`}${securityScoreListenerActive ? ' 🔄 Real-time updates active' : ''}`
             )}
           </Text>
           
@@ -2503,6 +2686,27 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 20,
     backgroundColor: colors.primaryLight,
+  },
+  realtimeIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.success + '20',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginRight: 8,
+  },
+  realtimeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.success,
+    marginRight: 4,
+  },
+  realtimeText: {
+    fontSize: 10,
+    color: colors.success,
+    fontWeight: '600',
   },
   recommendationsContainer: {
     marginTop: 12,

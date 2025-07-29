@@ -393,7 +393,7 @@ export class MobileAlertSystem {
         priority: scanSummary.fraudCount > 0 ? 'high' : 'medium'
       };
       
-      const alertsRef = collection(db, 'fraudAlerts');
+      const alertsRef = collection(db, 'fraud_alerts');
       const alertDoc = await addDoc(alertsRef, alertData);
       
       console.log(`✅ Scan summary alert created: ${alertDoc.id}`);

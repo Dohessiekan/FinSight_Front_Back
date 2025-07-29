@@ -141,7 +141,7 @@ class SecurityScoreManager {
    */
   static async getUserAlerts(userId) {
     try {
-      const alertsRef = collection(db, 'fraudAlerts');
+      const alertsRef = collection(db, 'fraud_alerts');
       const q = query(
         alertsRef,
         where('userId', '==', userId),

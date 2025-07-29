@@ -115,7 +115,7 @@ class FirebaseErrorHandler {
       
       // Test 3: Fraud alerts collection access
       try {
-        const alertsRef = collection(db, 'fraudAlerts');
+        const alertsRef = collection(db, 'fraud_alerts');
         const q = query(alertsRef, limit(1));
         
         // Just create the query, don't execute it yet
@@ -135,7 +135,7 @@ class FirebaseErrorHandler {
       // Test 4: Real-time listener test
       if (userId) {
         try {
-          const alertsRef = collection(db, 'fraudAlerts');
+          const alertsRef = collection(db, 'fraud_alerts');
           const q = query(
             alertsRef, 
             where('userId', '==', userId),
@@ -206,7 +206,7 @@ class FirebaseErrorHandler {
     try {
       console.log('🔄 Creating robust real-time alerts listener...');
       
-      const alertsRef = collection(db, 'fraudAlerts');
+      const alertsRef = collection(db, 'fraud_alerts');
       const q = query(
         alertsRef, 
         where('userId', '==', userId),

@@ -118,8 +118,13 @@ export default function AdviceScreen() {
       }
       
       // Fallback: Try to get from recent alerts/fraud data
-      const alertsRef = collection(db, 'users', user.uid, 'fraudAlerts');
-      const alertsQuery = query(alertsRef, orderBy('createdAt', 'desc'), limit(10));
+      const alertsRef = collection(db, 'fraud_alerts');
+      const alertsQuery = query(
+        alertsRef, 
+        where('userId', '==', user.uid),
+        orderBy('createdAt', 'desc'), 
+        limit(10)
+      );
       const alertsSnapshot = await getDocs(alertsQuery);
       
       const suspiciousCount = alertsSnapshot.docs.length;
