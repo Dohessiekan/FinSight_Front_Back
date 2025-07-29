@@ -15,11 +15,47 @@ import {
   getDocs,
   increment,
   getDoc,
+  setDoc,
   onSnapshot
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 
 export class AdminNotificationManager {
+  
+  /**
+   * Helper function to ensure dashboard stats document exists
+   */
+  static async ensureDashboardStatsExists() {
+    try {
+      const dashboardRef = doc(db, 'dashboard', 'stats');
+      const dashboardDoc = await getDoc(dashboardRef);
+      
+      if (!dashboardDoc.exists()) {
+        console.log('📊 Creating dashboard stats document');
+        const today = new Date().toISOString().split('T')[0];
+        await setDoc(dashboardRef, {
+          pendingAdminReviews: 0,
+          approvedUserRequests: 0,
+          rejectedUserRequests: 0,
+          totalAdminApprovals: 0,
+          totalAdminRejections: 0,
+          lastAdminApproval: null,
+          lastAdminRejection: null,
+          [`daily_${today}.adminApprovals`]: 0,
+          [`daily_${today}.adminRejections`]: 0,
+          [`daily_${today}.pendingReviews`]: 0,
+          [`daily_${today}.date`]: today,
+          createdAt: serverTimestamp(),
+          lastUpdated: serverTimestamp()
+        });
+        console.log('✅ Dashboard stats document created');
+      }
+      return true;
+    } catch (error) {
+      console.error('❌ Failed to ensure dashboard stats exists:', error);
+      return false;
+    }
+  }
   
   /**
    * Admin approves user request to mark message as safe
@@ -33,46 +69,88 @@ export class AdminNotificationManager {
       const notificationDoc = await getDoc(notificationRef);
       
       if (!notificationDoc.exists()) {
-        throw new Error('Notification not found');
+        console.error(`❌ Notification ${notificationId} not found`);
+        return { success: false, message: 'Notification not found' };
       }
 
       const notificationData = notificationDoc.data();
-      const { messageId, userId } = notificationData;
+      console.log('📄 Notification data:', notificationData);
+      
+      // Try multiple possible field names for backward compatibility
+      const messageId = notificationData.messageId || notificationData.message?.id;
+      const userId = notificationData.userId || notificationData.user?.id || notificationData.userPhone;
+      
+      console.log('🔍 Extracted IDs:', { messageId, userId, rawData: notificationData });
+      
+      if (!messageId || !userId) {
+        console.error('❌ Missing messageId or userId in notification:', { 
+          messageId, 
+          userId, 
+          availableFields: Object.keys(notificationData),
+          notificationData 
+        });
+        return { success: false, message: `Invalid notification data - missing messageId (${messageId}) or userId (${userId})` };
+      }
 
       // Step 2: Use AdminMessageManager to mark as safe (responsive action)
-      const { AdminMessageManager } = await import('./AdminMessageManager');
-      await AdminMessageManager.markFraudAsSafe(messageId, userId, adminEmail, adminReason, false);
+      try {
+        console.log(`📝 Marking message ${messageId} as safe for user ${userId}`);
+        const { AdminMessageManager } = await import('./AdminMessageManager');
+        await AdminMessageManager.markFraudAsSafe(messageId, userId, adminEmail, adminReason, false);
+        console.log('✅ Message marked as safe successfully');
+      } catch (messageError) {
+        console.error('❌ Failed to mark message as safe:', messageError);
+        return { success: false, message: `Failed to mark message as safe: ${messageError.message}` };
+      }
 
       // Step 3: Update notification status
-      await updateDoc(notificationRef, {
-        status: 'approved',
-        adminResponse: {
-          adminEmail: adminEmail,
-          action: 'approved',
-          reason: adminReason,
-          approvedAt: serverTimestamp()
-        },
-        resolvedAt: serverTimestamp(),
-        lastUpdated: serverTimestamp()
-      });
+      try {
+        console.log(`📝 Updating notification ${notificationId} status`);
+        await updateDoc(notificationRef, {
+          status: 'approved',
+          adminResponse: {
+            adminEmail: adminEmail,
+            action: 'approved',
+            reason: adminReason,
+            approvedAt: serverTimestamp()
+          },
+          resolvedAt: serverTimestamp(),
+          lastUpdated: serverTimestamp()
+        });
+        console.log('✅ Notification status updated successfully');
+      } catch (notificationError) {
+        console.error('❌ Failed to update notification:', notificationError);
+        return { success: false, message: `Failed to update notification: ${notificationError.message}` };
+      }
 
       // Step 4: Create user notification about approval
-      const userNotificationRef = collection(db, 'userNotifications');
-      await addDoc(userNotificationRef, {
-        userId: userId,
-        type: 'admin_approval',
-        title: '✅ Message Marked as Safe',
-        message: `An admin has approved your request to mark the message as safe.`,
-        messageId: messageId,
-        originalMessage: notificationData.messageText || notificationData.content || 'Message content not available',
-        adminEmail: adminEmail,
-        createdAt: serverTimestamp(),
-        read: false,
-        priority: 'normal'
-      });
-
-      // Step 5: Update dashboard stats
       try {
+        console.log(`📱 Creating user notification for user ${userId}`);
+        const userNotificationRef = collection(db, 'userNotifications');
+        await addDoc(userNotificationRef, {
+          userId: userId,
+          type: 'admin_approval',
+          title: '✅ Message Marked as Safe',
+          message: `An admin has approved your request to mark the message as safe.`,
+          messageId: messageId,
+          originalMessage: notificationData.messageText || notificationData.content || notificationData.message?.text || 'Message content not available',
+          adminEmail: adminEmail,
+          createdAt: serverTimestamp(),
+          read: false,
+          priority: 'normal'
+        });
+        console.log('✅ User notification created successfully');
+      } catch (userNotificationError) {
+        console.error('❌ Failed to create user notification:', userNotificationError);
+        // Don't fail the entire process if user notification fails
+        console.warn('⚠️ Continuing despite user notification failure');
+      }
+
+      // Step 5: Update dashboard stats (optional - don't fail if this fails)
+      try {
+        console.log('📊 Updating dashboard stats');
+        await this.ensureDashboardStatsExists();
+        
         const dashboardRef = doc(db, 'dashboard', 'stats');
         const today = new Date().toISOString().split('T')[0];
         
@@ -86,8 +164,9 @@ export class AdminNotificationManager {
           [`daily_${today}.date`]: today,
           lastUpdated: serverTimestamp()
         });
+        console.log('✅ Dashboard stats updated successfully');
       } catch (dashboardError) {
-        console.warn('⚠️ Failed to update dashboard stats:', dashboardError);
+        console.warn('⚠️ Failed to update dashboard stats (non-critical):', dashboardError);
       }
 
       console.log(`✅ Admin approval complete for notification ${notificationId}`);
@@ -95,7 +174,7 @@ export class AdminNotificationManager {
 
     } catch (error) {
       console.error('❌ Failed to approve user request:', error);
-      throw error;
+      return { success: false, message: `Approval failed: ${error.message || 'Unknown error'}` };
     }
   }
 
@@ -111,58 +190,108 @@ export class AdminNotificationManager {
       const notificationDoc = await getDoc(notificationRef);
       
       if (!notificationDoc.exists()) {
-        throw new Error('Notification not found');
+        console.error(`❌ Notification ${notificationId} not found`);
+        return { success: false, message: 'Notification not found' };
       }
 
       const notificationData = notificationDoc.data();
-      const { messageId, userId } = notificationData;
+      console.log('📄 Notification data:', notificationData);
+      
+      // Try multiple possible field names for backward compatibility
+      const messageId = notificationData.messageId || notificationData.message?.id;
+      const userId = notificationData.userId || notificationData.user?.id || notificationData.userPhone;
+      
+      console.log('🔍 Extracted IDs:', { messageId, userId, rawData: notificationData });
+      
+      if (!messageId || !userId) {
+        console.error('❌ Missing messageId or userId in notification:', { 
+          messageId, 
+          userId, 
+          availableFields: Object.keys(notificationData),
+          notificationData 
+        });
+        return { success: false, message: `Invalid notification data - missing messageId (${messageId}) or userId (${userId})` };
+      }
 
       // Step 2: Restore original message status
-      const messageRef = doc(db, 'users', userId, 'messages', messageId);
-      await updateDoc(messageRef, {
-        status: notificationData.message.currentStatus, // Restore original status
-        adminReview: {
-          reviewedBy: 'admin',
-          adminEmail: adminEmail,
-          action: 'rejected_user_request',
-          timestamp: serverTimestamp(),
-          reason: rejectionReason,
-          originalUserRequest: notificationData.request.reason
-        },
-        updatedAt: serverTimestamp(),
-        pendingReview: null // Remove pending review status
-      });
+      try {
+        console.log(`📝 Updating message ${messageId} for user ${userId}`);
+        const messageRef = doc(db, 'users', userId, 'messages', messageId);
+        
+        // Check if message exists first
+        const messageDoc = await getDoc(messageRef);
+        if (!messageDoc.exists()) {
+          console.error(`❌ Message ${messageId} not found for user ${userId}`);
+          return { success: false, message: 'Original message not found' };
+        }
+        
+        await updateDoc(messageRef, {
+          status: notificationData.currentStatus || notificationData.message?.currentStatus || notificationData.message?.status || 'fraud', // Restore original status
+          adminReview: {
+            reviewedBy: 'admin',
+            adminEmail: adminEmail,
+            action: 'rejected_user_request',
+            timestamp: serverTimestamp(),
+            reason: rejectionReason,
+            originalUserRequest: notificationData.request?.reason || 'User requested safety review'
+          },
+          updatedAt: serverTimestamp(),
+          pendingReview: null // Remove pending review status
+        });
+        console.log('✅ Message status restored successfully');
+      } catch (messageError) {
+        console.error('❌ Failed to update message:', messageError);
+        return { success: false, message: `Failed to update message: ${messageError.message}` };
+      }
 
       // Step 3: Update notification status
-      await updateDoc(notificationRef, {
-        status: 'rejected',
-        adminResponse: {
-          adminEmail: adminEmail,
-          action: 'rejected',
-          reason: rejectionReason,
-          rejectedAt: serverTimestamp()
-        },
-        resolvedAt: serverTimestamp(),
-        lastUpdated: serverTimestamp()
-      });
+      try {
+        console.log(`📝 Updating notification ${notificationId} status`);
+        await updateDoc(notificationRef, {
+          status: 'rejected',
+          adminResponse: {
+            adminEmail: adminEmail,
+            action: 'rejected',
+            reason: rejectionReason,
+            rejectedAt: serverTimestamp()
+          },
+          resolvedAt: serverTimestamp(),
+          lastUpdated: serverTimestamp()
+        });
+        console.log('✅ Notification status updated successfully');
+      } catch (notificationError) {
+        console.error('❌ Failed to update notification:', notificationError);
+        return { success: false, message: `Failed to update notification: ${notificationError.message}` };
+      }
 
       // Step 4: Create user notification about rejection
-      const userNotificationRef = collection(db, 'userNotifications');
-      await addDoc(userNotificationRef, {
-        userId: userId,
-        type: 'admin_rejection',
-        title: '❌ Request Denied',
-        message: `An admin has reviewed your request but confirmed the message is fraudulent. Reason: ${rejectionReason}`,
-        messageId: messageId,
-        originalMessage: notificationData.messageText || notificationData.content || 'Message content not available',
-        adminEmail: adminEmail,
-        createdAt: serverTimestamp(),
-        read: false,
-        priority: 'high'
-      });
-
-      // Step 5: Update dashboard stats
       try {
+        console.log(`📱 Creating user notification for user ${userId}`);
+        const userNotificationRef = collection(db, 'userNotifications');
+        await addDoc(userNotificationRef, {
+          userId: userId,
+          type: 'admin_rejection',
+          title: '❌ Request Denied',
+          message: `An admin has reviewed your request but confirmed the message is fraudulent. Reason: ${rejectionReason}`,
+          messageId: messageId,
+          originalMessage: notificationData.messageText || notificationData.content || notificationData.message?.text || 'Message content not available',
+          adminEmail: adminEmail,
+          createdAt: serverTimestamp(),
+          read: false,
+          priority: 'high'
+        });
+        console.log('✅ User notification created successfully');
+      } catch (userNotificationError) {
+        console.error('❌ Failed to create user notification:', userNotificationError);
+        // Don't fail the entire process if user notification fails
+        console.warn('⚠️ Continuing despite user notification failure');
+      }
+
+      // Step 5: Update dashboard stats (optional - don't fail if this fails)
+      try {
+        console.log('📊 Updating dashboard stats');
+        await this.ensureDashboardStatsExists();
+        
         const dashboardRef = doc(db, 'dashboard', 'stats');
         const today = new Date().toISOString().split('T')[0];
         
@@ -176,16 +305,17 @@ export class AdminNotificationManager {
           [`daily_${today}.date`]: today,
           lastUpdated: serverTimestamp()
         });
+        console.log('✅ Dashboard stats updated successfully');
       } catch (dashboardError) {
-        console.warn('⚠️ Failed to update dashboard stats:', dashboardError);
+        console.warn('⚠️ Failed to update dashboard stats (non-critical):', dashboardError);
       }
 
-      console.log(`❌ Admin rejection complete for notification ${notificationId}`);
+      console.log(`✅ Admin rejection complete for notification ${notificationId}`);
       return { success: true, message: 'User request rejected and original status maintained' };
 
     } catch (error) {
       console.error('❌ Failed to reject user request:', error);
-      throw error;
+      return { success: false, message: `Rejection failed: ${error.message || 'Unknown error'}` };
     }
   }
 

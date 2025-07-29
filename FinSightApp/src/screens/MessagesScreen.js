@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, PermissionsAndroid, Platform, TextInput, Keyboard, SafeAreaView, StatusBar, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Card from '../components/Card';
@@ -7,6 +7,7 @@ import colors from '../theme/colors';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { analyzeMessages, analyzeMessagesComprehensive, detectSpamBatch, scanMessages } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+import { useUserNotifications } from '../hooks/useUserNotifications';
 import { db } from '../config/firebase';
 import DashboardStatsManager from '../utils/dashboardStats';
 import SimpleIncrementalScanner from '../utils/SimpleIncrementalScanner';
@@ -266,6 +267,53 @@ export default function MessagesScreen() {
   // Cache keys for offline storage
   const MESSAGES_CACHE_KEY = `messages_${user?.uid || 'guest'}`;
 
+  // Handle admin notification responses and message status updates
+  const handleMessageStatusUpdate = useCallback((messageId, newStatus, notification) => {
+    console.log(`🔔 Admin decision received: Message ${messageId} status changed to ${newStatus}`);
+    
+    // Update the message status in the local state
+    setMessages(prevMessages => 
+      prevMessages.map(msg => 
+        msg.id === messageId 
+          ? { 
+              ...msg, 
+              status: newStatus,
+              adminReview: {
+                reviewedBy: 'admin',
+                adminEmail: notification.adminEmail,
+                action: notification.type === 'admin_approval' ? 'approved_user_request' : 'rejected_user_request',
+                timestamp: new Date(),
+                reason: notification.type === 'admin_approval' ? 'Admin marked as safe' : 'Admin confirmed as fraud'
+              },
+              updatedAt: new Date()
+            } 
+          : msg
+      )
+    );
+
+    // Update cache with new message status
+    updateCacheWithNewStatus(messageId, newStatus);
+  }, []); // Empty dependency array since we're using functional updates
+
+  // Set up notification listener for admin decisions
+  const { notifications, unreadCount } = useUserNotifications(handleMessageStatusUpdate);
+
+  // Function to update cache when message status changes
+  const updateCacheWithNewStatus = useCallback(async (messageId, newStatus) => {
+    try {
+      const cachedMessages = await loadFromCache(MESSAGES_CACHE_KEY);
+      if (cachedMessages) {
+        const updatedMessages = cachedMessages.map(msg => 
+          msg.id === messageId ? { ...msg, status: newStatus } : msg
+        );
+        await saveToCache(MESSAGES_CACHE_KEY, updatedMessages);
+        console.log(`✅ Cache updated for message ${messageId} with status ${newStatus}`);
+      }
+    } catch (error) {
+      console.error('❌ Failed to update cache:', error);
+    }
+  }, [MESSAGES_CACHE_KEY, loadFromCache, saveToCache]);
+
   // Utility function to check if error is due to Firebase being offline
   const isFirebaseOfflineError = (error) => {
     return error?.message?.includes('client is offline') || 
@@ -273,15 +321,15 @@ export default function MessagesScreen() {
   };
 
   // Cache management functions
-  const saveToCache = async (key, data) => {
+  const saveToCache = useCallback(async (key, data) => {
     try {
       await AsyncStorage.setItem(key, JSON.stringify(data));
     } catch (error) {
       console.error('Error saving to cache:', error);
     }
-  };
+  }, []);
 
-  const loadFromCache = async (key) => {
+  const loadFromCache = useCallback(async (key) => {
     try {
       const cachedData = await AsyncStorage.getItem(key);
       return cachedData ? JSON.parse(cachedData) : null;
@@ -289,7 +337,7 @@ export default function MessagesScreen() {
       console.error('Error loading from cache:', error);
       return null;
     }
-  };
+  }, []);
 
   // Enhanced Firebase functions for message management with global duplicate detection
   const saveMessageToFirebase = async (message) => {

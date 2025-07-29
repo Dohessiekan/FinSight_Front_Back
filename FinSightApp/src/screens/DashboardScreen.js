@@ -28,6 +28,7 @@ import FirebaseErrorHandler from '../utils/FirebaseErrorHandler';
 import NotificationManager from '../utils/NotificationManager';
 import SMSMonitor from '../utils/SMSMonitor';
 import NotificationPanel from '../components/NotificationPanel';
+import SMSService from '../services/SMSService';
 import { 
   collection, 
   doc, 
@@ -1137,38 +1138,82 @@ export default function DashboardScreen({ navigation }) {
       
       console.log(`🔍 Starting current month SMS summary for ${currentMonthName}...`);
       
-      // Import SMS Service
-      const SMSService = (await import('../services/SMSService')).default;
+      // Check if SMS Service is available
+      if (!SMSService) {
+        throw new Error('SMS service not available. Please restart the app.');
+      }
       
       // Check permissions with clear user messaging
       console.log('📱 Checking SMS permissions for financial analysis...');
       
-      const hasPermissions = await SMSService.checkSMSPermissions();
+      let hasPermissions = false;
+      try {
+        hasPermissions = await SMSService.checkSMSPermissions();
+      } catch (permissionError) {
+        console.error('Error checking SMS permissions:', permissionError);
+        throw new Error('Unable to check SMS permissions. Please restart the app.');
+      }
+      
       if (!hasPermissions) {
         console.log('📱 SMS permissions needed - requesting from user...');
         
-        const granted = await SMSService.requestSMSPermissions();
-        if (!granted) {
-          throw new Error(`SMS permissions are required to analyze your ${currentMonthName} transactions. Please grant SMS access in your device settings and try again.`);
+        try {
+          const granted = await SMSService.requestSMSPermissions();
+          if (!granted) {
+            throw new Error(`SMS permissions are required to analyze your ${currentMonthName} transactions. Please grant SMS access in your device settings and try again.`);
+          }
+          console.log('✅ SMS permissions granted for financial analysis');
+        } catch (requestError) {
+          console.error('Error requesting SMS permissions:', requestError);
+          throw new Error('Failed to request SMS permissions. Please try again.');
         }
-        
-        console.log('✅ SMS permissions granted for financial analysis');
       } else {
         console.log('✅ SMS permissions already available');
       }
 
-      // Get all SMS messages
-      const allMessages = await SMSService.getAllSMS({ maxCount: 1000 });
-      console.log(`📱 Retrieved ${allMessages.length} total SMS messages`);
+      // Get all SMS messages with timeout and error handling
+      let allMessages = [];
+      try {
+        console.log('📱 Retrieving SMS messages...');
+        
+        // Add timeout to prevent hanging
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('SMS fetch timeout')), 15000)
+        );
+        
+        const smsPromise = SMSService.getAllSMS({ maxCount: 1000 });
+        allMessages = await Promise.race([smsPromise, timeoutPromise]);
+        
+        console.log(`📱 Retrieved ${allMessages?.length || 0} total SMS messages`);
+        
+        if (!allMessages || !Array.isArray(allMessages)) {
+          throw new Error('Invalid SMS data received');
+        }
+        
+      } catch (smsError) {
+        console.error('Error getting SMS messages:', smsError);
+        if (smsError.message.includes('timeout')) {
+          throw new Error('SMS retrieval timed out. Please try again.');
+        } else if (smsError.message.includes('permission')) {
+          throw new Error('SMS permission lost. Please restart the app.');
+        } else {
+          throw new Error('Failed to read SMS messages. Please try again.');
+        }
+      }
       
       // Filter to ONLY current month (same logic as MessagesScreen)
       const currentMonth = currentDate.getMonth();
       const currentYear = currentDate.getFullYear();
       
       const currentMonthMessages = allMessages.filter(message => {
-        const messageDate = new Date(parseInt(message.date));
-        return messageDate.getMonth() === currentMonth && 
-               messageDate.getFullYear() === currentYear;
+        try {
+          const messageDate = new Date(parseInt(message.date));
+          return messageDate.getMonth() === currentMonth && 
+                 messageDate.getFullYear() === currentYear;
+        } catch (dateError) {
+          console.log('Invalid date in message:', message.date);
+          return false;
+        }
       });
       
       console.log(`📅 Found ${currentMonthMessages.length} SMS messages from ${currentMonthName}`);
@@ -1216,7 +1261,7 @@ export default function DashboardScreen({ navigation }) {
       
       const transactionMessages = currentMonthMessages.filter(m => {
         const text = m.body || m.text || '';
-        if (!text) return false;
+        if (!text || typeof text !== 'string') return false;
         
         const textLower = text.toLowerCase();
         
@@ -1258,11 +1303,42 @@ export default function DashboardScreen({ navigation }) {
         return;
       }
 
-      // Extract message texts for API analysis
-      const messageTexts = transactionMessages.map(msg => msg.body || msg.text || '');
+      // Extract message texts for API analysis with validation
+      const messageTexts = transactionMessages
+        .map(msg => msg.body || msg.text || '')
+        .filter(text => text && typeof text === 'string' && text.trim().length > 0)
+        .slice(0, 100); // Limit to 100 messages for performance
       
-      // Send to API for financial analysis (using getSmsSummary from api.js)
-      const summary = await getSmsSummary(messageTexts);
+      if (messageTexts.length === 0) {
+        throw new Error('No valid message content found for analysis');
+      }
+      
+      // Send to API for financial analysis with timeout and retry
+      let summary;
+      try {
+        console.log(`📊 Analyzing ${messageTexts.length} transaction messages...`);
+        
+        const apiTimeout = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('API timeout')), 30000)
+        );
+        
+        const apiCall = getSmsSummary(messageTexts);
+        summary = await Promise.race([apiCall, apiTimeout]);
+        
+        if (!summary || typeof summary !== 'object') {
+          throw new Error('Invalid API response');
+        }
+        
+      } catch (apiError) {
+        console.error('API call failed:', apiError);
+        if (apiError.message.includes('timeout')) {
+          throw new Error('Analysis timed out. Please check your internet connection and try again.');
+        } else if (apiError.message.includes('network') || apiError.message.includes('fetch')) {
+          throw new Error('Network error. Please check your internet connection.');
+        } else {
+          throw new Error('Analysis service unavailable. Please try again later.');
+        }
+      }
       
       console.log(`📊 Analysis complete: ${transactionMessages.length} transactions from ${currentMonthMessages.length} SMS messages in ${currentMonthName}`);
       
@@ -1279,7 +1355,12 @@ export default function DashboardScreen({ navigation }) {
       
       // Save financial summary to Firebase for admin dashboard
       if (user) {
-        await saveUserFinancialSummary(user.uid, enhancedSummary);
+        try {
+          await saveUserFinancialSummary(user.uid, enhancedSummary);
+        } catch (saveError) {
+          console.error('Error saving summary to Firebase:', saveError);
+          // Don't throw error here, analysis was successful
+        }
       }
       
       // Update fraud score based on API response
@@ -1288,18 +1369,23 @@ export default function DashboardScreen({ navigation }) {
         
         // Create fraud alert for admin dashboard
         if (user && summary.suspicious_transactions > 2) {
-          await saveFraudAlert(user.uid, {
-            type: 'Multiple Suspicious Transactions',
-            severity: 'high',
-            message: `User detected ${summary.suspicious_transactions} suspicious transactions in ${currentMonthName}`,
-            confidence: Math.min(90, 60 + (summary.suspicious_transactions * 10)),
-            phone: 'Mobile App User',
-            details: {
-              suspiciousCount: summary.suspicious_transactions,
-              totalTransactions: summary.transactions_count,
-              month: currentMonthName
-            }
-          });
+          try {
+            await saveFraudAlert(user.uid, {
+              type: 'Multiple Suspicious Transactions',
+              severity: 'high',
+              message: `User detected ${summary.suspicious_transactions} suspicious transactions in ${currentMonthName}`,
+              confidence: Math.min(90, 60 + (summary.suspicious_transactions * 10)),
+              phone: 'Mobile App User',
+              details: {
+                suspiciousCount: summary.suspicious_transactions,
+                totalTransactions: summary.transactions_count,
+                month: currentMonthName
+              }
+            });
+          } catch (alertError) {
+            console.error('Error saving fraud alert:', alertError);
+            // Don't throw error here
+          }
         }
       } else {
         setFraudScore(Math.max(5, 15 - (summary.transactions_count || 0)));
@@ -1307,7 +1393,22 @@ export default function DashboardScreen({ navigation }) {
       
     } catch (error) {
       console.error('❌ Error in fetchRealSummary:', error);
-      setApiError(`Failed to analyze SMS: ${error.message}`);
+      
+      // More user-friendly error messages
+      let userMessage = 'Failed to analyze SMS';
+      if (error.message.includes('permission')) {
+        userMessage = 'SMS permission required';
+      } else if (error.message.includes('not available')) {
+        userMessage = 'SMS service unavailable. Please restart the app.';
+      } else if (error.message.includes('timeout')) {
+        userMessage = 'Request timed out. Please try again.';
+      } else if (error.message.includes('network') || error.message.includes('internet')) {
+        userMessage = 'Network error. Check your connection.';
+      } else if (error.message.includes('service unavailable')) {
+        userMessage = 'Analysis service temporarily unavailable.';
+      }
+      
+      setApiError(userMessage);
       
       // Fallback summary
       setApiSummary({
@@ -1318,7 +1419,7 @@ export default function DashboardScreen({ navigation }) {
         total_airtime: 0,
         latest_balance: 0,
         monthly_summary: {},
-        message: `Error: ${error.message}`
+        message: `Error: ${userMessage}`
       });
     } finally {
       setApiLoading(false);
@@ -2006,19 +2107,16 @@ export default function DashboardScreen({ navigation }) {
             <View style={styles.errorContainer}>
               <MaterialIcons name="info" size={16} color={colors.warning} />
               <Text style={styles.errorText}>{apiError}</Text>
-            </View>
-          )}
-          
-          {/* Monthly Breakdown - show if we have monthly summary from API */}
-          {apiSummary && apiSummary.monthly_summary && Object.keys(apiSummary.monthly_summary).length > 0 && (
-            <View style={styles.monthlyBreakdown}>
-              <Text style={[styles.sectionTitle, { fontSize: 16, marginBottom: 12 }]}>Monthly Outgoing (Sent + Payments)</Text>
-              {Object.entries(apiSummary.monthly_summary).map(([month, amount]) => (
-                <View key={month} style={styles.monthlyItem}>
-                  <Text style={styles.monthlyMonth}>{month}</Text>
-                  <Text style={styles.monthlyAmount}>RWF {amount?.toLocaleString() || '0'}</Text>
-                </View>
-              ))}
+              <TouchableOpacity 
+                style={styles.retryButton}
+                onPress={fetchRealSummary}
+                disabled={apiLoading}
+              >
+                <MaterialIcons name="refresh" size={14} color={colors.primary} />
+                <Text style={styles.retryButtonText}>
+                  {apiLoading ? 'Retrying...' : 'Retry'}
+                </Text>
+              </TouchableOpacity>
             </View>
           )}
         </Card>
@@ -2423,8 +2521,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   errorContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: colors.warningLight,
     padding: 12,
     borderRadius: 8,
@@ -2435,6 +2531,23 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     color: colors.warning,
+    marginBottom: 8,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  retryButtonText: {
+    fontSize: 12,
+    color: colors.primary,
+    fontWeight: '500',
   },
   quickActionsContainer: {
     marginBottom: 24,
@@ -2648,27 +2761,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     marginBottom: 2,
-  },
-  monthlyBreakdown: {
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  monthlyItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  monthlyMonth: {
-    fontSize: 14,
-    color: colors.textSecondary,
-  },
-  monthlyAmount: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
   },
   realtimeBadge: {
     backgroundColor: colors.success + '20',
