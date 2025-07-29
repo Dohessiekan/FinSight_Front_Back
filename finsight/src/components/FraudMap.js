@@ -39,8 +39,6 @@ const FraudMap = () => {
   const [fraudAlerts, setFraudAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedFilter, setSelectedFilter] = useState('all'); // all, fraud, suspicious, today
-  const [locationAlerts, setLocationAlerts] = useState({}); // Store alerts by location
-  const [selectedLocation, setSelectedLocation] = useState(null); // Currently selected location for detailed view
   const [areaDetailsModal, setAreaDetailsModal] = useState({ isOpen: false, data: null, lat: null, lng: null }); // Area details modal
   const [mapStats, setMapStats] = useState({
     total: 0,
@@ -48,6 +46,18 @@ const FraudMap = () => {
     suspicious: 0,
     withRealGPS: 0
   });
+
+  // Helper function to calculate distance between two GPS coordinates (Haversine formula)
+  const calculateDistance = (lat1, lng1, lat2, lng2) => {
+    const R = 6371; // Earth's radius in kilometers
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLng/2) * Math.sin(dLng/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c; // Distance in kilometers
+  };
 
   useEffect(() => {
     console.log('🗺️ Setting up ULTRA-PROACTIVE real-time fraud alerts map...');
@@ -370,20 +380,7 @@ const FraudMap = () => {
       }));
       
       const locationKey = `${latitude.toFixed(4)}_${longitude.toFixed(4)}`;
-      setLocationAlerts(prev => ({
-        ...prev,
-        [locationKey]: enhancedAlerts
-      }));
-      
-      setSelectedLocation({
-        latitude,
-        longitude,
-        alerts: enhancedAlerts,
-        key: locationKey,
-        userBasedResults: result.userBasedResults, // Add user-specific data
-        areaStats: result.areaStats,
-        locationAnalysis: result.locationAnalysis
-      });
+      // Removed setLocationAlerts and setSelectedLocation (unused state variables)
       
       console.log(`🗺️ ENHANCED: Loaded ${enhancedAlerts.length} alerts from ${result.uniqueUsers} users for location ${locationKey}`);
       console.log(`📊 Area stats:`, result.areaStats);
@@ -410,6 +407,12 @@ const FraudMap = () => {
     console.log(`🕐 Request timestamp: ${new Date().toISOString()}`);
     console.log(`🎯 Location alerts received:`, locationAlerts);
     
+    // ENHANCED DEBUGGING: Log all current fraud alerts on map for comparison
+    console.log(`🗺️ DEBUGGING: Current fraud alerts on map (${fraudAlerts.length} total):`);
+    fraudAlerts.forEach((alert, index) => {
+      console.log(`  Alert ${index + 1}: UserId=${alert.userId || alert.user_id}, Coords=[${alert.lat}, ${alert.lng}], Distance=${calculateDistance(lat, lng, alert.lat, alert.lng).toFixed(2)}km`);
+    });
+    
     // NEW APPROACH: If we have alerts with user IDs, use direct user search
     let result = null;
     
@@ -431,15 +434,93 @@ const FraudMap = () => {
       }
     }
     
-    // Fallback to coordinate-based search if direct search failed or no user ID
+    // ENHANCED coordinate-based search with multiple radius attempts
+    let successfulRadius = 'Unknown';
     if (!result || !result.success) {
-      console.log('🔄 Falling back to coordinate-based search...');
-      try {
-        console.log('🔍 Calling MobileAlertSystem.getFraudMessagesInArea v2.1...');
-        result = await MobileAlertSystem.getFraudMessagesInArea(lat, lng, 2);
-      } catch (fallbackError) {
-        console.error('❌ Coordinate search also failed:', fallbackError);
-        result = { success: false, error: 'Both search methods failed' };
+      console.log('🔄 Falling back to ENHANCED coordinate-based search...');
+      
+      // Try multiple search radiuses to find fraud messages
+      const searchRadiuses = [2, 5, 10, 20, 50]; // km
+      
+      for (const radius of searchRadiuses) {
+        try {
+          console.log(`🔍 Trying search radius: ${radius}km around ${lat}, ${lng}...`);
+          result = await MobileAlertSystem.getFraudMessagesInArea(lat, lng, radius);
+          
+          if (result && result.success && result.userBasedResults?.users?.length > 0) {
+            console.log(`✅ Found ${result.userBasedResults.users.length} users with fraud messages at ${radius}km radius!`);
+            successfulRadius = radius;
+            break; // Stop searching once we find results
+          } else {
+            console.log(`❌ No results at ${radius}km radius`);
+          }
+        } catch (searchError) {
+          console.error(`❌ Search failed at ${radius}km radius:`, searchError);
+        }
+      }
+      
+      // If still no results, try a direct database search for ANY fraud messages from this user
+      if (!result || !result.success) {
+        console.log('🔍 LAST RESORT: Using current map fraud alerts as fallback...');
+        try {
+          // Create a result from current fraud alerts on the map
+          const mapAlerts = fraudAlerts.map(alert => ({
+            id: alert.id,
+            userId: alert.userId || alert.user_id,
+            messageText: alert.messageText || alert.message || alert.content,
+            sender: alert.sender,
+            phone: alert.phone || 'Unknown',
+            confidence: alert.confidence || 0,
+            severity: alert.severity || 'unknown',
+            fraudType: alert.fraudType || alert.type,
+            detectedAt: alert.timestamp || alert.createdAt,
+            location: {
+              coordinates: {
+                latitude: alert.lat,
+                longitude: alert.lng
+              },
+              address: {
+                formattedAddress: alert.displayLocation || `${alert.lat}, ${alert.lng}`
+              }
+            }
+          }));
+          
+          // Group by user
+          const userGroups = {};
+          mapAlerts.forEach(alert => {
+            const userId = alert.userId || 'unknown';
+            if (!userGroups[userId]) {
+              userGroups[userId] = {
+                userId: userId,
+                fraudMessages: [],
+                riskLevel: 'medium',
+                avgRiskScore: 5.0
+              };
+            }
+            userGroups[userId].fraudMessages.push(alert);
+          });
+          
+          result = {
+            success: true,
+            alerts: mapAlerts,
+            userBasedResults: {
+              users: Object.values(userGroups),
+              totalUsers: Object.keys(userGroups).length
+            },
+            areaStats: {
+              totalAlerts: mapAlerts.length,
+              averageConfidence: mapAlerts.reduce((sum, a) => sum + (a.confidence || 0), 0) / mapAlerts.length
+            },
+            locationAnalysis: {
+              summary: `Found ${mapAlerts.length} fraud alerts from ${Object.keys(userGroups).length} users in map data`
+            }
+          };
+          
+          console.log('🎯 Fallback result using map alerts:', result);
+        } catch (fallbackError) {
+          console.error('❌ All search methods failed:', fallbackError);
+          result = { success: false, error: 'All search methods failed' };
+        }
       }
     }
     
@@ -475,7 +556,8 @@ const FraudMap = () => {
           data: enhancedData.alerts,
           enhancedData: enhancedData,
           lat: lat,
-          lng: lng
+          lng: lng,
+          searchRadius: successfulRadius // Store which radius worked
         });
         
         console.log('✅ Enhanced area modal data set successfully');
@@ -581,7 +663,16 @@ const FraudMap = () => {
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             />
             
-            {filteredAlerts.map(alert => (
+            {filteredAlerts.map(alert => {
+              // Find the most recent fraud message for this user from all current alerts
+              const userAlerts = fraudAlerts.filter(a => 
+                (a.userId || a.user_id) === (alert.userId || alert.user_id)
+              ).sort((a, b) => new Date(b.timestamp || b.createdAt) - new Date(a.timestamp || a.createdAt));
+              
+              // Use the most recent alert data for display
+              const latestAlert = userAlerts.length > 0 ? userAlerts[0] : alert;
+              
+              return (
               <React.Fragment key={alert.id}>
                 {/* Main marker for the alert */}
                 <Marker 
@@ -590,31 +681,43 @@ const FraudMap = () => {
                 >
                   <Popup>
                     <div className="alert-popup">
-                      <h4 style={{ color: getAlertColor(alert), margin: '0 0 10px 0' }}>
-                        {String(alert.mapData?.title || alert.type || 'Fraud Alert')}
+                      <h4 style={{ color: getAlertColor(latestAlert), margin: '0 0 10px 0' }}>
+                        {String(latestAlert.mapData?.title || latestAlert.type || 'Fraud Alert')}
+                        {userAlerts.length > 1 && (
+                          <span style={{ 
+                            fontSize: '11px', 
+                            background: '#dc3545', 
+                            color: 'white', 
+                            padding: '2px 6px', 
+                            borderRadius: '10px', 
+                            marginLeft: '8px' 
+                          }}>
+                            Latest of {userAlerts.length}
+                          </span>
+                        )}
                       </h4>
                       
                       <div className="popup-content">
-                        <p><strong>📱 From:</strong> {String(alert.sender || 'Unknown')}</p>
-                        <p><strong>📍 Location:</strong> {String(alert.displayLocation || 'Unknown')}</p>
-                        <p><strong>🎯 Confidence:</strong> {Math.round((alert.confidence || 0) * 100)}%</p>
-                        <p><strong>👤 User ID:</strong> {String(alert.userId || 'Unknown')}</p>
-                        {alert.amount && (
-                          <p><strong>💰 Amount:</strong> {formatCurrency(alert.amount)}</p>
+                        <p><strong>📱 From:</strong> {String(latestAlert.sender || 'Unknown')}</p>
+                        <p><strong>📍 Location:</strong> {String(latestAlert.displayLocation || 'Unknown')}</p>
+                        <p><strong>🎯 Confidence:</strong> {Math.round((latestAlert.confidence || 0) * 100)}%</p>
+                        <p><strong>👤 User ID:</strong> {String(latestAlert.userId || latestAlert.user_id || 'Unknown')}</p>
+                        {latestAlert.amount && (
+                          <p><strong>💰 Amount:</strong> {formatCurrency(latestAlert.amount)}</p>
                         )}
                         <p><strong>🕐 Time:</strong> {
-                          alert.timestamp && typeof alert.timestamp.toLocaleString === 'function' ? 
-                            alert.timestamp.toLocaleString() : 
-                            String(alert.timestamp || 'Unknown')
+                          latestAlert.timestamp && typeof latestAlert.timestamp.toLocaleString === 'function' ? 
+                            latestAlert.timestamp.toLocaleString() : 
+                            String(latestAlert.timestamp || latestAlert.createdAt?.toDate?.()?.toLocaleString() || 'Unknown')
                         }</p>
-                        <p><strong>📡 GPS:</strong> {alert.isRealGPS ? '✅ Real GPS' : '📍 Default Location'}</p>
-                        {alert.accuracy && (
-                          <p><strong>🎯 Accuracy:</strong> ±{Math.round(alert.accuracy)}m</p>
+                        <p><strong>📡 GPS:</strong> {latestAlert.isRealGPS ? '✅ Real GPS' : '📍 Default Location'}</p>
+                        {latestAlert.accuracy && (
+                          <p><strong>🎯 Accuracy:</strong> ±{Math.round(latestAlert.accuracy)}m</p>
                         )}
                         
-                        {alert.messageText && (
+                        {(latestAlert.messageText || latestAlert.message || latestAlert.content) && (
                           <div className="message-preview">
-                            <strong>💬 Message:</strong>
+                            <strong>💬 Latest Message:</strong>
                             <p style={{ 
                               fontSize: '12px', 
                               fontStyle: 'italic', 
@@ -625,18 +728,28 @@ const FraudMap = () => {
                               borderRadius: '4px',
                               border: '1px solid #dee2e6'
                             }}>
-                              "{String(alert.messageText || alert.message || alert.content || 'No message content')}"
+                              "{String(latestAlert.messageText || latestAlert.message || latestAlert.content || 'No message content')}"
                             </p>
+                            {userAlerts.length > 1 && (
+                              <p style={{ 
+                                fontSize: '10px', 
+                                color: '#6c757d', 
+                                marginTop: '4px', 
+                                fontWeight: 'bold' 
+                              }}>
+                                ⚠️ This user has {userAlerts.length} total fraud attempts
+                              </p>
+                            )}
                           </div>
                         )}
                       </div>
                       
                       <div className="popup-footer">
-                        <span className={`severity-badge ${alert.severity || ''}`}>
-                          {String(alert.severity?.toUpperCase() || 'ALERT')}
+                        <span className={`severity-badge ${latestAlert.severity || ''}`}>
+                          {String(latestAlert.severity?.toUpperCase() || 'ALERT')}
                         </span>
                         <span className="source-badge">
-                          {String(alert.source || 'Mobile App')}
+                          {String(latestAlert.source || 'Mobile App')}
                         </span>
                       </div>
 
@@ -667,7 +780,7 @@ const FraudMap = () => {
                             marginBottom: '8px'
                           }}
                         >
-                          📍 View All Messages in This Area
+                          📍 View All Messages in This Area {userAlerts.length > 1 && `(${userAlerts.length} total)`}
                         </button>
                         <small style={{ color: '#1565c0', fontSize: '11px' }}>
                           Click to see all fraud alerts within 2km radius
@@ -678,21 +791,21 @@ const FraudMap = () => {
                       <div className="admin-actions">
                         <button 
                           className="admin-btn safe-btn"
-                          onClick={() => handleMarkAsSafe(alert)}
+                          onClick={() => handleMarkAsSafe(latestAlert)}
                           title="Mark this message as safe"
                         >
                           ✅ Mark Safe
                         </button>
                         <button 
                           className="admin-btn block-btn"
-                          onClick={() => handleBlockSender(alert)}
+                          onClick={() => handleBlockSender(latestAlert)}
                           title="Block this sender permanently"
                         >
                           🚫 Block Sender
                         </button>
                         <button 
                           className="admin-btn dismiss-btn"
-                          onClick={() => handleDismissAlert(alert)}
+                          onClick={() => handleDismissAlert(latestAlert)}
                           title="Dismiss from admin view"
                         >
                           👋 Dismiss
@@ -715,7 +828,8 @@ const FraudMap = () => {
                   />
                 )}
               </React.Fragment>
-            ))}
+              );
+            })}
           </MapContainer>
         </div>
       )}
@@ -1108,7 +1222,7 @@ const FraudMap = () => {
             }}>
               <p><strong>📍 Location:</strong> {areaDetailsModal.lat?.toFixed(4)}, {areaDetailsModal.lng?.toFixed(4)}</p>
               <p><strong>📊 Total Fraud Alerts:</strong> {areaDetailsModal.data?.length || 0}</p>
-              <p><strong>🎯 Search Radius:</strong> 2km</p>
+              <p><strong>🎯 Search Radius:</strong> {areaDetailsModal.searchRadius || 2}km {areaDetailsModal.searchRadius > 2 ? '(Extended search)' : ''}</p>
               
               {/* Enhanced Statistics */}
               {areaDetailsModal.enhancedData?.areaStats && (
