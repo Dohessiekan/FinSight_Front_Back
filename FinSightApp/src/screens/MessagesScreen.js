@@ -836,17 +836,34 @@ export default function MessagesScreen() {
       
       console.log(`🔍 Starting incremental SMS scan for ${currentMonthName}...`);
       
-      // Step 1: Get existing messages from Firebase for current month
+      // Step 1: Get user's Firestore data to check for account recreation
+      let userFirestoreData = null;
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userRef);
+        if (userDoc.exists()) {
+          userFirestoreData = userDoc.data();
+          console.log('👤 User Firestore data loaded for account recreation check');
+        } else {
+          console.log('👤 No Firestore user data found - will be treated as first connection');
+        }
+      } catch (userError) {
+        console.warn('⚠️ Failed to load user Firestore data:', userError);
+        // Continue with scan even if we can't get user data
+      }
+      
+      // Step 2: Get existing messages from Firebase for current month
       const existingMessages = await getExistingCurrentMonthMessages();
       
-      // Step 2: Get ALL messages from device and filter for new ones only
+      // Step 3: Get ALL messages from device and filter for new ones only
       const allMessages = await scanSmsMessages();
-      console.log(`� Found ${allMessages.length} total SMS messages on device`);
+      console.log(`📱 Found ${allMessages.length} total SMS messages on device`);
       
       // Use incremental scanning to get only new messages since last scan
+      // Pass user Firestore data to detect account recreation
       let scanResult;
       try {
-        scanResult = await SimpleIncrementalScanner.filterNewMessages(user.uid, allMessages || []);
+        scanResult = await SimpleIncrementalScanner.filterNewMessages(user.uid, allMessages || [], userFirestoreData);
       } catch (scanError) {
         console.error('❌ Incremental scan failed:', scanError);
         Alert.alert('Scan Error', 'Failed to perform incremental scan. Please try again.');
@@ -857,8 +874,17 @@ export default function MessagesScreen() {
       const newMessages = (scanResult && scanResult.messagesToAnalyze) ? scanResult.messagesToAnalyze : [];
       console.log(`🆕 ${scanResult ? scanResult.summary : 'Scan failed'}`);
       
-      if (newMessages.length === 0) {
-        // Show existing messages from Firebase
+      // Handle account recreation case
+      if (scanResult?.accountRecreated) {
+        Alert.alert(
+          '🔄 Account Recreated',
+          'Your account was recreated after deletion. All SMS messages will be analyzed fresh.',
+          [{ text: 'Continue', style: 'default' }]
+        );
+      }
+      
+      if (newMessages.length === 0 && !scanResult?.accountRecreated) {
+        // Show existing messages from Firebase (only if account wasn't recreated)
         setMessages(existingMessages);
         setScanComplete(true);
         setLoading(false);

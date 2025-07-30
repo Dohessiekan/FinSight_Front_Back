@@ -1908,7 +1908,55 @@ export default function DashboardScreen({ navigation }) {
               <Ionicons name="notifications" size={16} color={colors.white} />
             </TouchableOpacity>
             
-            {/* 🔒 Security Score Real-time Test Button */}
+            {/* � Reset Scan Data Button */}
+            <TouchableOpacity 
+              style={[styles.notificationButton, { backgroundColor: colors.danger, marginRight: 8 }]}
+              onPress={async () => {
+                Alert.alert(
+                  '🔄 Reset Scan Data',
+                  'This will clear all local scan history and cached data. Your next SMS scan will analyze all messages fresh, just like a first-time user.\n\n⚠️ This is useful if:\n• Your account was deleted from admin panel\n• SMS scan shows "no new messages" incorrectly\n• You want to rescan all messages\n\nThis will NOT delete your messages from the server.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { 
+                      text: 'Reset Data', 
+                      style: 'destructive',
+                      onPress: async () => {
+                        try {
+                          console.log('🔄 User requested manual data reset...');
+                          
+                          const result = await UserDataManager.manualResetUserData(user.uid);
+                          
+                          if (result.success) {
+                            Alert.alert(
+                              '✅ Reset Complete',
+                              'All local scan data has been cleared successfully!\n\n🔄 Next SMS scan will analyze all messages fresh.\n📅 All cache and scan history cleared.\n\nYou can now go to Messages screen and scan again.',
+                              [{ text: 'OK' }]
+                            );
+                          } else {
+                            Alert.alert(
+                              '❌ Reset Failed',
+                              `Failed to reset data: ${result.error}\n\nPlease try again or contact support.`,
+                              [{ text: 'OK' }]
+                            );
+                          }
+                        } catch (error) {
+                          console.error('❌ Manual reset error:', error);
+                          Alert.alert(
+                            '❌ Reset Error',
+                            `Error during reset: ${error.message}\n\nPlease try again.`,
+                            [{ text: 'OK' }]
+                          );
+                        }
+                      }
+                    }
+                  ]
+                );
+              }}
+            >
+              <Ionicons name="refresh-circle" size={16} color={colors.white} />
+            </TouchableOpacity>
+            
+            {/* �🔒 Security Score Real-time Test Button */}
             <TouchableOpacity 
               style={[styles.notificationButton, { backgroundColor: colors.success, marginRight: 8 }]}
               onPress={() => {

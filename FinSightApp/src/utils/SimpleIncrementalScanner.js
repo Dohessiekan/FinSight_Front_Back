@@ -37,8 +37,9 @@ export class SimpleIncrementalScanner {
   
   /**
    * Filter messages to only include NEW ones since last scan
+   * Now includes automatic detection of recreated accounts
    */
-  static async filterNewMessages(userId, allMessages) {
+  static async filterNewMessages(userId, allMessages, userFirestoreData = null) {
     try {
       // Safety checks
       if (!userId) {
@@ -48,6 +49,20 @@ export class SimpleIncrementalScanner {
       if (!allMessages || !Array.isArray(allMessages)) {
         console.warn('⚠️ Invalid allMessages array provided, using empty array');
         allMessages = [];
+      }
+      
+      // Check if account was recreated and reset scan history if needed
+      if (userFirestoreData) {
+        const wasReset = await this.checkAndResetForRecreatedAccount(userId, userFirestoreData);
+        if (wasReset) {
+          console.log('🆕 Account recreated - treating as first scan');
+          return {
+            messagesToAnalyze: allMessages,
+            isFirstScan: true,
+            accountRecreated: true,
+            summary: `Account recreated - analyzing all ${allMessages.length} messages`
+          };
+        }
       }
       
       const lastScanTimestamp = await this.getLastScanTimestamp(userId);
@@ -115,7 +130,7 @@ export class SimpleIncrementalScanner {
   }
   
   /**
-   * Reset scan history (useful for testing)
+   * Reset scan history (useful for testing or account recreation)
    */
   static async resetScanHistory(userId) {
     try {
@@ -123,6 +138,45 @@ export class SimpleIncrementalScanner {
       console.log('🔄 Scan history reset - next scan will be treated as first scan');
     } catch (error) {
       console.error('Error resetting scan history:', error);
+    }
+  }
+
+  /**
+   * Check if scan history should be reset based on Firestore account status
+   * Call this before filtering messages to detect recreated accounts
+   */
+  static async checkAndResetForRecreatedAccount(userId, userFirestoreData) {
+    try {
+      const lastScanTimestamp = await this.getLastScanTimestamp(userId);
+      
+      if (!lastScanTimestamp || !userFirestoreData) {
+        return false; // No local scan history or no Firestore data
+      }
+      
+      // Get Firestore account creation date
+      const firestoreCreatedAt = userFirestoreData.createdAt?.toDate?.() || userFirestoreData.createdAt;
+      
+      if (!firestoreCreatedAt) {
+        return false; // No creation date in Firestore
+      }
+      
+      const firestoreCreatedTimestamp = new Date(firestoreCreatedAt).getTime();
+      
+      // If Firestore account was created AFTER our last scan, it means account was recreated
+      if (firestoreCreatedTimestamp > lastScanTimestamp) {
+        console.log('🔄 Detected recreated Firestore account - resetting scan history');
+        console.log(`📅 Local last scan: ${new Date(lastScanTimestamp).toISOString()}`);
+        console.log(`📅 Firestore created: ${new Date(firestoreCreatedTimestamp).toISOString()}`);
+        
+        await this.resetScanHistory(userId);
+        return true; // History was reset
+      }
+      
+      return false; // No reset needed
+      
+    } catch (error) {
+      console.error('Error checking for recreated account:', error);
+      return false;
     }
   }
 }

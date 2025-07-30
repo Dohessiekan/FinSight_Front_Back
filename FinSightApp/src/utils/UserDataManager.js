@@ -69,24 +69,46 @@ class UserDataManager {
       const firstConnectionKey = this.CACHE_KEYS.FIRST_CONNECTION + userId;
       const localRecord = await AsyncStorage.getItem(firstConnectionKey);
       
-      if (localRecord) {
-        return false; // User has connected before
-      }
-      
-      // Check Firebase user document
+      // Always check Firebase to detect if account was deleted and recreated
       const userRef = doc(db, 'users', userId);
       const userDoc = await getDoc(userRef);
       
-      if (userDoc.exists()) {
-        // Mark as not first connection locally
-        await AsyncStorage.setItem(firstConnectionKey, JSON.stringify({
-          firstConnection: false,
-          timestamp: new Date().toISOString()
-        }));
-        return false;
+      if (!userDoc.exists()) {
+        // User doesn't exist in Firestore
+        if (localRecord) {
+          // User existed locally but not in Firestore = account was deleted
+          console.log('🔄 User account was deleted from Firestore - resetting all local data');
+          await this.resetUserDataAfterAccountDeletion(userId);
+        }
+        return true; // Truly first connection (or recreated account)
       }
       
-      return true; // Truly first connection
+      // User exists in Firestore
+      const userData = userDoc.data();
+      const firestoreCreatedAt = userData.createdAt?.toDate?.() || userData.createdAt;
+      
+      if (localRecord) {
+        const localData = JSON.parse(localRecord);
+        const localTimestamp = new Date(localData.timestamp);
+        
+        // Check if Firestore account is newer than local record (indicates recreated account)
+        if (firestoreCreatedAt && firestoreCreatedAt > localTimestamp) {
+          console.log('🔄 Detected recreated Firestore account - resetting local data');
+          console.log(`📅 Local timestamp: ${localTimestamp.toISOString()}`);
+          console.log(`📅 Firestore created: ${firestoreCreatedAt.toISOString()}`);
+          await this.resetUserDataAfterAccountDeletion(userId);
+          return true; // Treat as first connection for recreated account
+        }
+        
+        return false; // User has connected before and account wasn't recreated
+      }
+      
+      // No local record but user exists in Firestore - mark as not first connection
+      await AsyncStorage.setItem(firstConnectionKey, JSON.stringify({
+        firstConnection: false,
+        timestamp: new Date().toISOString()
+      }));
+      return false;
       
     } catch (error) {
       console.error('❌ Failed to check first connection:', error);
@@ -487,6 +509,87 @@ class UserDataManager {
       
     } catch (error) {
       console.error('❌ Failed to clear user cache:', error);
+    }
+  }
+
+  /**
+   * Reset all user data after account deletion/recreation
+   * This includes scan history, first connection flags, and cached data
+   */
+  static async resetUserDataAfterAccountDeletion(userId) {
+    try {
+      console.log('🔄 Resetting user data after account deletion...');
+      
+      // Import SimpleIncrementalScanner to reset scan history
+      const { SimpleIncrementalScanner } = await import('./SimpleIncrementalScanner');
+      
+      // Reset scan history to allow full rescan
+      await SimpleIncrementalScanner.resetScanHistory(userId);
+      
+      // Import SecurityScoreManager to reset scan activity
+      const SecurityScoreManager = await import('./SecurityScoreManager');
+      const scanHistoryKey = `scan_history_${userId}`;
+      await AsyncStorage.removeItem(scanHistoryKey);
+      
+      // Clear all user cache
+      await this.clearUserCache(userId);
+      
+      // Remove first connection flag to trigger fresh setup
+      const firstConnectionKey = this.CACHE_KEYS.FIRST_CONNECTION + userId;
+      await AsyncStorage.removeItem(firstConnectionKey);
+      
+      // Clear other scan-related data
+      const additionalKeys = [
+        `lastProcessedSMS_${userId}`,
+        `pendingAnalysisCount_${userId}`,
+        `user_financial_summary_${userId}`,
+        `messages_cache_${userId}`,
+        `last_analysis_${userId}`
+      ];
+      
+      await AsyncStorage.multiRemove(additionalKeys);
+      
+      console.log('✅ User data reset complete - next scan will analyze all messages');
+      
+    } catch (error) {
+      console.error('❌ Failed to reset user data after account deletion:', error);
+    }
+  }
+
+  /**
+   * Manual reset function for testing or troubleshooting
+   * Use this when you want to manually clear all local user data
+   */
+  static async manualResetUserData(userId) {
+    try {
+      console.log('🔧 Manual reset of user data...');
+      
+      await this.resetUserDataAfterAccountDeletion(userId);
+      
+      // Also clear additional manual testing keys
+      const testingKeys = [
+        `device_fingerprint`,
+        `global_message_cache`,
+        `location_permissions_${userId}`,
+        `sms_permissions_${userId}`
+      ];
+      
+      await AsyncStorage.multiRemove(testingKeys);
+      
+      console.log('✅ Manual user data reset complete');
+      
+      return {
+        success: true,
+        message: 'All user data cleared. Next SMS scan will analyze all messages fresh.',
+        resetTimestamp: new Date().toISOString()
+      };
+      
+    } catch (error) {
+      console.error('❌ Manual reset failed:', error);
+      return {
+        success: false,
+        error: error.message
+      };
     }
   }
   
