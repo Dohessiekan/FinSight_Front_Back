@@ -288,7 +288,7 @@ export class AdminMessageManager {
     try {
       // Step 1: Check if message exists in user's messages collection, handle both locations
       let messageInUserCollection = false;
-      let messageData = null;
+      // let messageData = null; // Commented out to fix ESLint warning
       
       try {
         const messageRef = doc(db, 'users', userId, 'messages', messageId);
@@ -296,7 +296,7 @@ export class AdminMessageManager {
         
         if (messageDoc.exists()) {
           messageInUserCollection = true;
-          messageData = messageDoc.data();
+          // messageData = messageDoc.data(); // Commented out to fix ESLint warning
           console.log(`✅ Message ${messageId} found in user's messages collection`);
           
           // Update message status in user's collection

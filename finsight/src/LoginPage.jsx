@@ -44,7 +44,7 @@ const LoginPage = ({ onLogin }) => {
   return (
     <div className="login-container">      <div className="login-left">
         <div className="logo-container">
-          <img src={process.env.PUBLIC_URL + '/logoX.svg'} alt="FinSight Logo" className="logo-img" />
+          <img src="/logoX.svg" alt="FinSight Logo" className="logo-img" />
         </div>
         <div className="text-container">
           <p className="logo-description">

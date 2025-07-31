@@ -75,7 +75,7 @@ const Overview = () => {
       <div className="stats-container">
         <div className="stat-card">
           <img 
-            src={process.env.PUBLIC_URL + '/phone.svg'} 
+            src={'/'phone.svg'} 
             alt="Phone" 
             className="stat-icon"
           />
@@ -84,7 +84,7 @@ const Overview = () => {
         </div>
         <div className="stat-card">
           <img 
-            src={process.env.PUBLIC_URL + '/sms2.svg'} 
+            src={'/'sms2.svg'} 
             alt="SMS" 
             className="stat-icon"
           />
@@ -93,7 +93,7 @@ const Overview = () => {
         </div>
         <div className="stat-card">
           <img 
-            src={process.env.PUBLIC_URL + '/sms.svg'} 
+            src={'/'sms.svg'} 
             alt="SMS Today" 
             className="stat-icon"
           />
@@ -102,7 +102,7 @@ const Overview = () => {
         </div>
         <div className="stat-card">
           <img 
-            src={process.env.PUBLIC_URL + '/phone.svg'} 
+            src={'/'phone.svg'} 
             alt="Phone" 
             className="stat-icon"
           />
@@ -111,7 +111,7 @@ const Overview = () => {
         </div>
         <div className="stat-card">
           <img 
-            src={process.env.PUBLIC_URL + '/stats.svg'} 
+            src={'/'stats.svg'} 
             alt="Stats" 
             className="stat-icon"
           />

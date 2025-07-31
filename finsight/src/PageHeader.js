@@ -12,14 +12,14 @@ const PageHeader = ({ title }) => (
           className="search-input"
         />
         <img 
-          src={process.env.PUBLIC_URL + '/search.svg'} 
+          src="/search.svg" 
           alt="Search" 
           className="search-icon"
         />
       </div>
       <div className="notification-container">
         <img 
-          src={process.env.PUBLIC_URL + '/notification.svg'} 
+          src="/notification.svg" 
           alt="Notifications" 
           className="notification-icon"
         />

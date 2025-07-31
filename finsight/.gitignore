@@ -37,3 +37,4 @@ yarn-error.log*
 
 # Remove unwanted src.zip if present
 src.zip
+.vercel

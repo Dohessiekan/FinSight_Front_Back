@@ -4,8 +4,12 @@ import {
   analyzeNewIncomingMessage, 
   saveMessageFromMobileDisplay,
   syncMobileMessagesToWeb,
-  cleanupEntireFirestore
+  cleanupEntireFirestore,
+  fetchAllSMSMessages,
+  fetchUserMessages
 } from '../utils/firebaseMessages';
+import { db } from '../config/firebase';
+import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
 
 function SMSAnalysisTest() {
   const [results, setResults] = useState(null);
@@ -270,6 +274,148 @@ function SMSAnalysisTest() {
     setUserId('test_user_' + Date.now());
   };
 
+  // NEW: Reset user stats to match actual message count
+  const resetUserStats = async () => {
+    setLoading(true);
+    try {
+      const realUserId = "joMK439ut5WdgYYHx4HBe3yZslg2"; // Your actual user ID
+      console.log(`🔄 Resetting user stats for: ${realUserId}`);
+      
+      // Get actual message count
+      const messagesSnapshot = await getDocs(collection(db, 'users', realUserId, 'messages'));
+      const actualMessageCount = messagesSnapshot.docs.length;
+      
+      console.log(`📊 Found ${actualMessageCount} actual messages in Firestore`);
+      
+      // Count safe vs fraud messages
+      let safeCount = 0;
+      let fraudCount = 0;
+      let suspiciousCount = 0;
+      
+      messagesSnapshot.forEach(doc => {
+        const data = doc.data();
+        const status = data.status || data.riskLevel;
+        if (status === 'fraud' || status === 'high') {
+          fraudCount++;
+        } else if (status === 'suspicious' || status === 'medium') {
+          suspiciousCount++;
+        } else {
+          safeCount++;
+        }
+      });
+      
+      // Reset user document stats to match actual data
+      const userRef = doc(db, 'users', realUserId);
+      const resetData = {
+        totalMessages: actualMessageCount,
+        safeMessages: safeCount,
+        fraudDetected: fraudCount,
+        fraudsDetected: fraudCount,
+        suspiciousDetected: suspiciousCount,
+        messagesAnalyzed: actualMessageCount,
+        updatedAt: new Date().toISOString(),
+        lastStatsReset: new Date().toISOString(),
+        statsResetReason: 'Fixed duplicate counting issue'
+      };
+      
+      await updateDoc(userRef, resetData);
+      
+      console.log(`✅ User stats reset successfully:`, resetData);
+      
+      setResults({
+        type: 'reset_stats',
+        data: {
+          before: '232 total messages (incorrect)',
+          after: `${actualMessageCount} total messages (correct)`,
+          breakdown: {
+            safe: safeCount,
+            fraud: fraudCount,
+            suspicious: suspiciousCount,
+            total: actualMessageCount
+          }
+        },
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (error) {
+      console.error('❌ Reset failed:', error);
+      setResults({
+        type: 'reset_stats',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // NEW: Debug function to check actual Firestore data for a specific user
+  const debugUserMessages = async () => {
+    setLoading(true);
+    try {
+      const realUserId = "joMK439ut5WdgYYHx4HBe3yZslg2"; // Your actual user ID
+      console.log(`🔍 Debugging messages for user: ${realUserId}`);
+      
+      // Check user document
+      const userDoc = await getDoc(doc(db, 'users', realUserId));
+      if (userDoc.exists()) {
+        console.log('👤 User document found:', userDoc.data());
+      } else {
+        console.log('❌ User document not found!');
+      }
+      
+      // Check messages subcollection
+      const messagesSnapshot = await getDocs(collection(db, 'users', realUserId, 'messages'));
+      console.log(`📱 Found ${messagesSnapshot.docs.length} messages in Firestore`);
+      
+      const messages = [];
+      messagesSnapshot.forEach(doc => {
+        const data = doc.data();
+        messages.push({
+          id: doc.id,
+          content: data.text || data.messageContent || data.content || data.body || 'No content field found',
+          timestamp: data.createdAt || data.timestamp || 'No timestamp',
+          fields: Object.keys(data) // Show all available fields
+        });
+      });
+      
+      console.log('📱 Messages found:', messages);
+      
+      // Try fetchUserMessages function
+      console.log('🔄 Testing fetchUserMessages function...');
+      const fetchedMessages = await fetchUserMessages(realUserId);
+      console.log(`📋 fetchUserMessages returned ${fetchedMessages.length} messages:`, fetchedMessages);
+      
+      // Try fetchAllSMSMessages function
+      console.log('🔄 Testing fetchAllSMSMessages function...');
+      const allMessages = await fetchAllSMSMessages();
+      console.log(`📋 fetchAllSMSMessages returned ${allMessages.length} total messages:`, allMessages);
+      
+      setResults({
+        type: 'debug_user',
+        data: {
+          userExists: userDoc.exists(),
+          userData: userDoc.exists() ? userDoc.data() : null,
+          directMessages: messages.length,
+          fetchedMessages: fetchedMessages.length,
+          allMessages: allMessages.length,
+          sampleMessages: messages.slice(0, 3)
+        },
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (error) {
+      console.error('❌ Debug failed:', error);
+      setResults({
+        type: 'debug_user',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div style={{ padding: '20px', maxWidth: '800px', margin: '0 auto' }}>
       <h2>📱 SMS Analysis Test Suite</h2>
@@ -349,6 +495,36 @@ function SMSAnalysisTest() {
         </button>
 
         <button 
+          onClick={debugUserMessages}
+          disabled={loading}
+          style={{
+            padding: '10px 15px',
+            backgroundColor: '#fd7e14',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            cursor: loading ? 'not-allowed' : 'pointer'
+          }}
+        >
+          {loading ? '⏳ Debugging...' : '🐛 Debug Real User Messages'}
+        </button>
+
+        <button 
+          onClick={resetUserStats}
+          disabled={loading}
+          style={{
+            padding: '10px 15px',
+            backgroundColor: '#28a745',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            cursor: loading ? 'not-allowed' : 'pointer'
+          }}
+        >
+          {loading ? '⏳ Resetting...' : '🔧 Reset User Stats (Fix 232 → 2)'}
+        </button>
+
+        <button 
           onClick={testBulkSync}
           disabled={loading}
           style={{
@@ -392,6 +568,8 @@ function SMSAnalysisTest() {
              results.type === 'new_message' ? '📱 New Message Results' :
              results.type === 'mobile_display' ? '💬 Mobile Display Save Results' :
              results.type === 'bulk_sync' ? '🔄 Bulk Sync Results' :
+             results.type === 'debug_user' ? '🐛 User Debug Results' :
+             results.type === 'reset_stats' ? '🔧 User Stats Reset Results' :
              results.type === 'cleanup' ? '🗑️ Firestore Cleanup Results' : '📊 Test Results'}
           </h3>
           

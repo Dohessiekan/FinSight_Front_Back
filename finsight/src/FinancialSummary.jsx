@@ -11,18 +11,18 @@ const FinancialSummary = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [firebaseData, setFirebaseData] = useState(null);
-  const [dashboardStats, setDashboardStats] = useState(null);
+  // const [dashboardStats, setDashboardStats] = useState(null); // Commented out to fix ESLint warning
 
   // Load Firebase data on component mount
   useEffect(() => {
     const loadFirebaseData = async () => {
       try {
-        const [summaries, stats] = await Promise.all([
+        const [summaries] = await Promise.all([
           fetchAllUserFinancialSummaries(),
           fetchDashboardStats()
         ]);
         setFirebaseData(summaries);
-        setDashboardStats(stats);
+        // setDashboardStats(stats); // Commented out to fix ESLint warning
       } catch (err) {
         console.error('Error loading Firebase data:', err);
       }
@@ -262,7 +262,7 @@ const FinancialSummary = () => {
             {timeRange === 'this-month' && 'This Month'}
             {timeRange === 'last-month' && 'Last Month'}
             {timeRange === 'this-year' && 'This Year'}
-            <img src={process.env.PUBLIC_URL + '/chevron-down.svg'} alt="Dropdown" className="filter-chevron" />
+            <img src="/chevron-down.svg" alt="Dropdown" className="filter-chevron" />
           </button>
           {showDropdown && (
             <div className="filter-dropdown-menu">
@@ -278,7 +278,7 @@ const FinancialSummary = () => {
       <div className="metrics-grid">
         <div className="metric-card">
           <div className="metric-icon">
-            <img src={process.env.PUBLIC_URL + '/stats.svg'} alt="Transactions" />
+            <img src="/stats.svg" alt="Transactions" />
           </div>
           <div className="metric-content">
             <div className="metric-value">{currentData.totalTransactions.toLocaleString()}</div>
@@ -288,7 +288,7 @@ const FinancialSummary = () => {
 
         <div className="metric-card">
           <div className="metric-icon">
-            <img src={process.env.PUBLIC_URL + '/amount.svg'} alt="Value" />
+            <img src="/amount.svg" alt="Value" />
           </div>
           <div className="metric-content">
             <div className="metric-value">{formatAmount(currentData.totalValue)}</div>
@@ -298,7 +298,7 @@ const FinancialSummary = () => {
 
         <div className="metric-card highlight-green">
           <div className="metric-icon">
-            <img src={process.env.PUBLIC_URL + '/alerts.svg'} alt="Prevented" />
+            <img src="/alerts.svg" alt="Prevented" />
           </div>
           <div className="metric-content">
             <div className="metric-value">{formatAmount(currentData.fraudPrevented)}</div>
@@ -308,7 +308,7 @@ const FinancialSummary = () => {
 
         <div className="metric-card">
           <div className="metric-icon">
-            <img src={process.env.PUBLIC_URL + '/amount.svg'} alt="Average" />
+            <img src="/amount.svg" alt="Average" />
           </div>
           <div className="metric-content">
             <div className="metric-value">{formatAmount(currentData.averageTransaction)}</div>
@@ -318,7 +318,7 @@ const FinancialSummary = () => {
 
         <div className="metric-card highlight-orange">
           <div className="metric-icon">
-            <img src={process.env.PUBLIC_URL + '/alerts.svg'} alt="Suspicious" />
+            <img src="/alerts.svg" alt="Suspicious" />
           </div>
           <div className="metric-content">
             <div className="metric-value">{currentData.suspiciousTransactions}</div>
@@ -328,7 +328,7 @@ const FinancialSummary = () => {
 
         <div className="metric-card highlight-red">
           <div className="metric-icon">
-            <img src={process.env.PUBLIC_URL + '/amount.svg'} alt="Flagged" />
+            <img src="/amount.svg" alt="Flagged" />
           </div>
           <div className="metric-content">
             <div className="metric-value">{formatAmount(currentData.flaggedAmount)}</div>

@@ -364,7 +364,7 @@ class MessageCountAnalyzer {
         return `❌ Analysis failed: ${result.error}`;
       }
       
-      const analysis = result.analysis;
+      // const analysis = result.analysis; // Commented out to fix ESLint warning
       const summary = result.analysis ? result.analysis : result.summary;
       
       let diagnostic = `📊 MESSAGE COUNT DIAGNOSTIC\n\n`;

@@ -11,7 +11,7 @@ const FraudAlerts = () => {
   const [gpsFilter, setGpsFilter] = useState('all'); // all, real-gps, default
   const [searchUser, setSearchUser] = useState('');
   const [error, setError] = useState(null);
-  const [user, setUser] = useState(null);
+  // const [user, setUser] = useState(null); // Commented out to fix ESLint warning
 
   // Set up real-time listener for fraud alerts
   useEffect(() => {
@@ -21,7 +21,7 @@ const FraudAlerts = () => {
     // Monitor authentication state
     authUnsubscribe = onAuthStateChanged(auth, (currentUser) => {
       console.log('🔐 Auth state changed:', currentUser ? 'Authenticated' : 'Not authenticated');
-      setUser(currentUser);
+      // setUser(currentUser); // Commented out to fix ESLint warning
       
       if (currentUser) {
         setupRealtimeAlerts();

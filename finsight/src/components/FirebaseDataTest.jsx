@@ -1,6 +1,6 @@
 // Test Firebase data fetching for SettingsPage
 import React, { useState, useEffect } from 'react';
-import { fetchDashboardStats, syncUserCount, cleanupDashboardStats } from '../utils/firebaseMessages';
+import { fetchDashboardStats, syncUserCount } from '../utils/firebaseMessages'; // Removed cleanupDashboardStats to fix ESLint warning
 import { testAndSetupFirebase } from '../utils/firebaseSetup';
 
 const FirebaseDataTest = () => {

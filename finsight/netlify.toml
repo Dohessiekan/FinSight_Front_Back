@@ -1,0 +1,19 @@
+[build]
+  publish = "build"
+  command = "npm run build"
+
+[build.environment]
+  REACT_APP_FIREBASE_API_KEY = "AIzaSyBWXfOsai-ZsT6-N7scG-MSzq6rxK34sGs"
+  REACT_APP_FIREBASE_AUTH_DOMAIN = "finsight-9d1fd.firebaseapp.com"
+  REACT_APP_FIREBASE_PROJECT_ID = "finsight-9d1fd"
+  REACT_APP_FIREBASE_STORAGE_BUCKET = "finsight-9d1fd.firebasestorage.app"
+  REACT_APP_FIREBASE_MESSAGING_SENDER_ID = "671699000955"
+  REACT_APP_FIREBASE_APP_ID = "1:671699000955:web:e3d406c7c6b8e033be8cde"
+  REACT_APP_FIREBASE_MEASUREMENT_ID = "G-QNCJYW0S0Y"
+  REACT_APP_API_BASE_URL = "https://finsight-front-back-2.onrender.com"
+  GENERATE_SOURCEMAP = "false"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
