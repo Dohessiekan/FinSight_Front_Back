@@ -2183,3 +2183,9 @@ jobs:
 - Use CDN for static assets (images, CSS, JS)
 - Optimize images and compress assets
 - Implement browser caching headers
+
+APK Link: ## 📦 Download
+
+[![Download APK](https://img.shields.io/badge/Download-APK-blue?logo=android&style=for-the-badge)](https://github.com/Dohessiekan/FinSight_Front_Back/releases/download/v0/app-release.apk)
+
+Dashboard Link: https://finsight-front-back-3.onrender.com
