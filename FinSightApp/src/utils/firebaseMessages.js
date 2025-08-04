@@ -1,6 +1,6 @@
 // Utility functions for saving user messages to Firebase Firestore
 import { db } from '../config/firebase';
-import { collection, addDoc, setDoc, doc, getDocs, query, where, updateDoc, increment, serverTimestamp, writeBatch, limit } from 'firebase/firestore';
+import { collection, addDoc, setDoc, doc, getDoc, getDocs, query, where, updateDoc, increment, serverTimestamp, writeBatch, limit } from 'firebase/firestore';
 
 /**
  * Save a message for a user in Firestore with analysis data
@@ -170,37 +170,82 @@ export async function testFirebaseConnection() {
 }
 
 /**
- * Simple user profile creation (bypasses dashboard updates)
+ * Enhanced user profile creation with account recreation detection
  */
 export async function createSimpleUserProfile(userId, userInfo = {}) {
   try {
-    console.log('🔥 SIMPLE CREATE: Starting basic user profile creation...');
-    console.log('🔥 SIMPLE CREATE: userId:', userId);
-    console.log('🔥 SIMPLE CREATE: userInfo:', userInfo);
+    console.log('🔥 ENHANCED CREATE: Starting user profile creation with recreation detection...');
+    console.log('🔥 ENHANCED CREATE: userId:', userId);
+    console.log('🔥 ENHANCED CREATE: userInfo:', userInfo);
     
     const userDocRef = doc(db, 'users', userId);
-    console.log('🔥 SIMPLE CREATE: Document reference created:', userDocRef.path);
+    console.log('🔥 ENHANCED CREATE: Document reference created:', userDocRef.path);
     
-    const basicProfile = {
-      userId,
-      email: userInfo.email || 'unknown@example.com',
-      displayName: userInfo.displayName || 'Mobile User',
-      createdAt: new Date().toISOString(), // Using regular date instead of serverTimestamp
-      source: 'mobile_app',
-      status: 'active'
-    };
+    // Check if user document already exists
+    console.log('🔥 ENHANCED CREATE: Checking if user already exists...');
+    const userSnap = await getDoc(userDocRef);
+    const userExists = userSnap.exists();
     
-    console.log('🔥 SIMPLE CREATE: Profile data:', JSON.stringify(basicProfile, null, 2));
+    const now = new Date().toISOString();
     
-    console.log('🔥 SIMPLE CREATE: Attempting to write to Firestore...');
-    await setDoc(userDocRef, basicProfile);
-    console.log('✅ SIMPLE CREATE: User profile saved successfully!');
-    
-    return basicProfile;
+    if (userExists) {
+      console.log('🔄 ENHANCED CREATE: User exists, updating login info...');
+      const existingData = userSnap.data();
+      
+      // Update existing user with login info
+      const updateData = {
+        lastLogin: now,
+        lastActive: now,
+        email: userInfo.email || existingData.email,
+        displayName: userInfo.displayName || existingData.displayName,
+        updatedAt: now,
+        loginCount: (existingData.loginCount || 0) + 1
+      };
+      
+      await setDoc(userDocRef, updateData, { merge: true });
+      console.log('✅ ENHANCED CREATE: Existing user profile updated successfully!');
+      
+      return { ...existingData, ...updateData, existed: true };
+    } else {
+      console.log('🆕 ENHANCED CREATE: Creating new user profile...');
+      
+      const newProfile = {
+        userId,
+        email: userInfo.email || 'unknown@example.com',
+        displayName: userInfo.displayName || userInfo.email?.split('@')[0] || 'Mobile User',
+        createdAt: now,
+        lastLogin: now,
+        lastActive: now,
+        source: 'mobile_app',
+        status: 'active',
+        // Message tracking
+        messagesAnalyzed: 0,
+        fraudsDetected: 0,
+        totalMessages: 0,
+        // Scan tracking for account recreation detection
+        initialAnalysisCompleted: false,
+        lastScanDate: null,
+        firstScanDate: null,
+        totalScans: 0,
+        // Account recreation tracking
+        accountRecreated: true, // This is a new account
+        originalCreationDate: now,
+        lastRecreationDate: null,
+        loginCount: 1,
+        profileVersion: '2.0'
+      };
+      
+      console.log('🔥 ENHANCED CREATE: Profile data:', JSON.stringify(newProfile, null, 2));
+      
+      await setDoc(userDocRef, newProfile);
+      console.log('✅ ENHANCED CREATE: New user profile created successfully!');
+      
+      return { ...newProfile, existed: false };
+    }
   } catch (error) {
-    console.error('❌ SIMPLE CREATE: Error:', error);
-    console.error('❌ SIMPLE CREATE: Error code:', error.code);
-    console.error('❌ SIMPLE CREATE: Error message:', error.message);
+    console.error('❌ ENHANCED CREATE: Error:', error);
+    console.error('❌ ENHANCED CREATE: Error code:', error.code);
+    console.error('❌ ENHANCED CREATE: Error message:', error.message);
     throw error;
   }
 }

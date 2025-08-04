@@ -5,6 +5,8 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../config/firebase';
 
 export class SimpleIncrementalScanner {
   
@@ -138,6 +140,70 @@ export class SimpleIncrementalScanner {
       console.log('🔄 Scan history reset - next scan will be treated as first scan');
     } catch (error) {
       console.error('Error resetting scan history:', error);
+    }
+  }
+
+  /**
+   * Enhanced recreation detection and reset with better logging
+   */
+  static async handleAccountRecreation(userId) {
+    try {
+      console.log('🔄 RECREATION CHECK: Checking for account recreation...');
+      
+      // Get local scan history
+      const lastScanTimestamp = await this.getLastScanTimestamp(userId);
+      
+      if (!lastScanTimestamp) {
+        console.log('📱 RECREATION CHECK: No local scan history found - treating as new account');
+        return { isNewAccount: true, recreated: false };
+      }
+      
+      console.log(`📱 RECREATION CHECK: Local last scan: ${new Date(lastScanTimestamp).toISOString()}`);
+      
+      // Use Firebase functions from imports at top of file
+      
+      // Check if user document exists in Firestore
+      const userRef = doc(db, 'users', userId);
+      const userSnap = await getDoc(userRef);
+      
+      if (!userSnap.exists()) {
+        console.log('🆕 RECREATION CHECK: User document not found in Firestore - treating as new account');
+        await this.resetScanHistory(userId);
+        return { isNewAccount: true, recreated: false };
+      }
+      
+      const userData = userSnap.data();
+      console.log('🔍 RECREATION CHECK: User document found in Firestore');
+      console.log('🔍 RECREATION CHECK: User created at:', userData.createdAt);
+      
+      // Check if Firestore account was created after local scan
+      let firestoreCreatedTimestamp;
+      
+      if (userData.createdAt) {
+        if (typeof userData.createdAt === 'string') {
+          firestoreCreatedTimestamp = new Date(userData.createdAt).getTime();
+        } else if (userData.createdAt.toDate) {
+          firestoreCreatedTimestamp = userData.createdAt.toDate().getTime();
+        } else {
+          firestoreCreatedTimestamp = new Date(userData.createdAt).getTime();
+        }
+      }
+      
+      if (firestoreCreatedTimestamp && firestoreCreatedTimestamp > lastScanTimestamp) {
+        console.log('🔄 RECREATION CHECK: Account recreation detected!');
+        console.log(`📅 Local last scan: ${new Date(lastScanTimestamp).toISOString()}`);
+        console.log(`📅 Firestore created: ${new Date(firestoreCreatedTimestamp).toISOString()}`);
+        
+        await this.resetScanHistory(userId);
+        return { isNewAccount: false, recreated: true };
+      }
+      
+      console.log('✅ RECREATION CHECK: No recreation detected - account is continuing');
+      return { isNewAccount: false, recreated: false };
+      
+    } catch (error) {
+      console.error('❌ RECREATION CHECK: Error checking for recreation:', error);
+      return { isNewAccount: false, recreated: false, error: error.message };
     }
   }
 

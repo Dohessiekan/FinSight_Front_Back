@@ -339,7 +339,7 @@ export default function MessagesScreen() {
     }
   }, []);
 
-  // Enhanced Firebase functions for message management with global duplicate detection
+  // Enhanced Firebase functions for message management with global duplicate detection and account recreation handling
   const saveMessageToFirebase = async (message) => {
     if (!user) {
       console.error('❌ Cannot save message: User not authenticated');
@@ -349,6 +349,30 @@ export default function MessagesScreen() {
     try {
       console.log(`💾 Attempting to save message for user: ${user.uid}`);
       console.log(`📝 Message text preview: ${message.text?.substring(0, 50)}...`);
+      
+      // Step 1: Check for account recreation before saving any messages
+      try {
+        const recreationStatus = await SimpleIncrementalScanner.handleAccountRecreation(user.uid);
+        
+        if (recreationStatus.recreated || recreationStatus.isNewAccount) {
+          console.log('🔄 Account recreation detected, ensuring user profile exists...');
+          
+          // Import the function from utils
+          const { createSimpleUserProfile } = await import('../utils/firebaseMessages');
+          
+          await createSimpleUserProfile(user.uid, {
+            email: user.email,
+            displayName: user.displayName || user.email?.split('@')[0] || 'Mobile User'
+          });
+          
+          if (recreationStatus.recreated) {
+            console.log('🆕 Account was recreated - all messages will be saved fresh');
+          }
+        }
+      } catch (recreationError) {
+        console.warn('⚠️ Account recreation check failed:', recreationError);
+        // Continue with normal save process
+      }
       
       // Original user-level save function
       const saveToUserCollection = async (msg) => {
@@ -396,44 +420,50 @@ export default function MessagesScreen() {
       if (result.skipped) {
         console.log(`🌍 Global duplicate detected - message skipped for user ${user.uid}`);
         console.log(`👤 Original user: ${result.originalUser}`);
+        console.log(`📊 Stats NOT updated - message was a duplicate`);
         return result;
       }
       
-      // Update dashboard stats with comprehensive tracking
-      try {
-        const dashboardRef = doc(db, 'dashboard', 'stats');
-        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-        
-        // Prepare the update data
-        const updateData = {
-          totalMessagesAnalyzed: increment(1),
-          smsAnalyzedToday: increment(1),
-          totalSmsAnalyzedToday: increment(1), // Match the field name in your dashboard
-          smsCount: increment(1), // New field to track SMS count
-          lastUpdated: serverTimestamp(),
-          lastSync: serverTimestamp()
-        };
-        
-        // Add daily tracking
-        updateData[`daily_${today}.smsCount`] = increment(1);
-        updateData[`daily_${today}.date`] = today;
-        
-        // Track fraud/suspicious messages based on message status
-        if (message.status === 'fraud') {
-          updateData.activeFraudAlerts = increment(1);
-          updateData.fraudsPrevented = increment(1);
-          updateData[`daily_${today}.fraudCount`] = increment(1);
-        } else if (message.status === 'suspicious') {
-          updateData[`daily_${today}.suspiciousCount`] = increment(1);
-        } else if (message.status === 'safe') {
-          updateData[`daily_${today}.safeCount`] = increment(1);
+      // ✅ FIXED: Only update dashboard stats when message is actually saved (not skipped)
+      if (result.success && !result.exists) {
+        // Update dashboard stats with comprehensive tracking
+        try {
+          const dashboardRef = doc(db, 'dashboard', 'stats');
+          const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+          
+          // Prepare the update data
+          const updateData = {
+            totalMessagesAnalyzed: increment(1),
+            smsAnalyzedToday: increment(1),
+            totalSmsAnalyzedToday: increment(1), // Match the field name in your dashboard
+            smsCount: increment(1), // New field to track SMS count
+            lastUpdated: serverTimestamp(),
+            lastSync: serverTimestamp()
+          };
+          
+          // Add daily tracking
+          updateData[`daily_${today}.smsCount`] = increment(1);
+          updateData[`daily_${today}.date`] = today;
+          
+          // Track fraud/suspicious messages based on message status
+          if (message.status === 'fraud') {
+            updateData.activeFraudAlerts = increment(1);
+            updateData.fraudsPrevented = increment(1);
+            updateData[`daily_${today}.fraudCount`] = increment(1);
+          } else if (message.status === 'suspicious') {
+            updateData[`daily_${today}.suspiciousCount`] = increment(1);
+          } else if (message.status === 'safe') {
+            updateData[`daily_${today}.safeCount`] = increment(1);
+          }
+          
+          await updateDoc(dashboardRef, updateData);
+          console.log('📈 Dashboard stats updated comprehensively for NEW message:', updateData);
+        } catch (dashboardError) {
+          console.warn('⚠️ Failed to update dashboard stats:', dashboardError.message);
+          console.warn('⚠️ Dashboard error details:', dashboardError);
         }
-        
-        await updateDoc(dashboardRef, updateData);
-        console.log('📈 Dashboard stats updated comprehensively:', updateData);
-      } catch (dashboardError) {
-        console.warn('⚠️ Failed to update dashboard stats:', dashboardError.message);
-        console.warn('⚠️ Dashboard error details:', dashboardError);
+      } else {
+        console.log(`📊 Stats NOT updated - message already existed (exists: ${result.exists})`);
       }
       
       // Return the result from the global duplicate detector
