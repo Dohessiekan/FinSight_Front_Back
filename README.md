@@ -147,7 +147,7 @@ For the fastest setup, use our automated script:
 ```bash
 # Clone the repository
 git clone https://github.com/Dohessiekan/FinSight_Front_Back.git
-cd FinSight_Front_Back-6
+cd FinSightAPP OR cd finsight
 
 # Install all dependencies
 npm run setup-all  # This will install dependencies for all components
